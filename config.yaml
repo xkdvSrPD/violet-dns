@@ -21,7 +21,6 @@ upstream_group:
     nameservers:
       - https://1.1.1.1/dns-query
       - https://8.8.8.8/dns-query
-      - quic://dns.adguard.com
     outbound: hk
     strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
     concurrent_queries: true  # Query A and AAAA in parallel
@@ -32,14 +31,12 @@ upstream_group:
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:
     nameservers:
-      - 8.8.8.8
       - https://8.8.8.8/dns-query
-      - https://1.1.1.1/dns-query
     outbound: hk
     strategy: prefer_ipv4
     concurrent_queries: true
     force_ecs: true
-    ecs_ip: 1.1.1.0/24  # Per-group ECS configuration
+    ecs_ip: 113.132.219.0/24  # Per-group ECS configuration
     timeout: 5s
 
   # Domestic DNS (direct connection)
@@ -52,7 +49,6 @@ upstream_group:
     strategy: prefer_ipv4
     concurrent_queries: true
     enable_ecs: true
-    ecs_ip: 113.132.219.0/24
     timeout: 3s
 
 # Outbound (SOCKS5 Proxies)
@@ -82,9 +78,9 @@ outbound:
 ecs:
   enable: true
   default_ipv4: 113.132.219.0/24
-  default_ipv6: 2001:da8::/96
+  default_ipv6: 240e:358:a07:94c2:d589:ebf2:9d2:be0e/64
   ipv4_prefix: 24  # Send /24 prefix (hides last octet for privacy)
-  ipv6_prefix: 96  # Send /96 prefix
+  ipv6_prefix: 64  # Send /64 prefix
 
 # Cache Configuration
 cache:
@@ -117,7 +113,7 @@ redis:
 # Domain Categorization Policy
 category_policy:
   preload:
-    enable: true
+    enable: false
     file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
     update: '0 0 2 * * *'  # Update at 2 AM daily
     domain_group:

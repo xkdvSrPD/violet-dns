@@ -2,7 +2,6 @@ package upstream
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"violet-dns/middleware"
 	"violet-dns/outbound"
 
+	"github.com/AdguardTeam/dnsproxy/upstream"
 	"github.com/miekg/dns"
 )
 
@@ -18,6 +18,7 @@ import (
 type Group struct {
 	name        string
 	nameservers []string
+	upstreams   []upstream.Upstream // AdGuard 的 upstream 实例
 	outbound    outbound.Outbound
 	strategy    string
 	timeout     time.Duration
@@ -29,14 +30,59 @@ type Group struct {
 
 // NewGroup 创建新的上游组
 func NewGroup(name string, nameservers []string, ob outbound.Outbound, strategy string, timeout time.Duration, logger *middleware.Logger) *Group {
-	return &Group{
+	g := &Group{
 		name:        name,
 		nameservers: nameservers,
 		outbound:    ob,
 		strategy:    strategy,
 		timeout:     timeout,
 		logger:      logger,
+		upstreams:   make([]upstream.Upstream, 0, len(nameservers)),
 	}
+
+	// 初始化所有 upstream
+	for _, ns := range nameservers {
+		u, err := g.createUpstream(ns)
+		if err != nil {
+			logger.Warn("创建 upstream 失败: nameserver=%s error=%v", ns, err)
+			continue
+		}
+		g.upstreams = append(g.upstreams, u)
+	}
+
+	return g
+}
+
+// createUpstream 创建单个 upstream
+func (g *Group) createUpstream(nameserver string) (upstream.Upstream, error) {
+	// AdGuard upstream 支持的格式:
+	// - https://dns.google/dns-query (DoH)
+	// - tls://dns.google (DoT)
+	// - quic://dns.adguard.com (DoQ)
+	// - 8.8.8.8:53 或 8.8.8.8 (UDP/TCP)
+	// - tcp://8.8.8.8:53 (强制 TCP)
+	// - sdns://... (DNSCrypt)
+
+	// 处理不带端口的普通 IP
+	if !strings.Contains(nameserver, "://") && !strings.Contains(nameserver, ":") {
+		// 检查是否是 IP 地址
+		if net.ParseIP(nameserver) != nil {
+			nameserver = nameserver + ":53"
+		}
+	}
+
+	// 使用 AdGuard upstream 库创建
+	opts := &upstream.Options{
+		Timeout: g.timeout,
+		// 不设置 Bootstrap，让库使用系统 DNS
+	}
+
+	u, err := upstream.AddressToUpstream(nameserver, opts)
+	if err != nil {
+		return nil, fmt.Errorf("创建 upstream 失败: %w", err)
+	}
+
+	return u, nil
 }
 
 // Query 查询 DNS
@@ -54,7 +100,7 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 		g.logger.Debug("添加ECS: domain=%s ecs_ip=%s", domain, g.ecsIP)
 	}
 
-	// 并发查询所有 nameserver
+	// 并发查询所有 upstream
 	type result struct {
 		resp       *dns.Msg
 		err        error
@@ -62,18 +108,22 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 		latency    time.Duration
 	}
 
-	resChan := make(chan result, len(g.nameservers))
-	queryCtx, cancel := context.WithTimeout(ctx, g.timeout)
-	defer cancel()
+	if len(g.upstreams) == 0 {
+		return nil, fmt.Errorf("没有可用的 upstream")
+	}
 
-	for _, ns := range g.nameservers {
-		go func(nameserver string) {
+	resChan := make(chan result, len(g.upstreams))
+
+	for i, u := range g.upstreams {
+		go func(ups upstream.Upstream, nameserver string) {
 			queryStart := time.Now()
-			resp, err := g.queryNameserver(queryCtx, m, nameserver)
+
+			// 使用 upstream.Exchange 进行查询
+			resp, err := ups.Exchange(m)
 			queryLatency := time.Since(queryStart)
 
 			if err != nil {
-				g.logger.LogUpstreamError(queryCtx, domain, nameserver, err, queryLatency)
+				g.logger.LogUpstreamError(ctx, domain, nameserver, err, queryLatency)
 			}
 
 			resChan <- result{
@@ -82,23 +132,23 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 				nameserver: nameserver,
 				latency:    queryLatency,
 			}
-		}(ns)
+		}(u, g.nameservers[i])
 	}
 
 	// 等待第一个成功的响应
 	var lastErr error
-	for i := 0; i < len(g.nameservers); i++ {
+	for i := 0; i < len(g.upstreams); i++ {
 		select {
 		case res := <-resChan:
 			if res.err == nil && res.resp != nil {
 				// DEBUG: 记录成功的响应
-				g.logger.LogUpstreamResponse(queryCtx, domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
+				g.logger.LogUpstreamResponse(ctx, domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
 				g.logger.Debug("使用Nameserver响应: nameserver=%s group=%s total_latency=%v",
 					res.nameserver, g.name, time.Since(startTime))
 				return res.resp, nil
 			}
 			lastErr = res.err
-		case <-queryCtx.Done():
+		case <-ctx.Done():
 			g.logger.Debug("上游查询超时: group=%s domain=%s timeout=%v", g.name, domain, g.timeout)
 			return nil, fmt.Errorf("查询超时")
 		}
@@ -106,117 +156,6 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 
 	g.logger.Debug("所有Nameserver查询失败: group=%s domain=%s last_error=%v", g.name, domain, lastErr)
 	return nil, fmt.Errorf("所有 nameserver 查询失败: %v", lastErr)
-}
-
-// queryNameserver 查询单个 nameserver
-func (g *Group) queryNameserver(ctx context.Context, m *dns.Msg, nameserver string) (*dns.Msg, error) {
-	// 根据 nameserver 格式选择协议
-	// 支持的格式:
-	// - https://dns.google/dns-query (DoH)
-	// - tls://dns.google (DoT)
-	// - 8.8.8.8 或 8.8.8.8:53 (UDP/TCP)
-	// - tcp://8.8.8.8:53 (强制 TCP)
-
-	if strings.HasPrefix(nameserver, "https://") {
-		return g.queryDoH(ctx, m, nameserver)
-	} else if strings.HasPrefix(nameserver, "tls://") {
-		return g.queryDoT(ctx, m, strings.TrimPrefix(nameserver, "tls://"))
-	} else if strings.HasPrefix(nameserver, "tcp://") {
-		return g.queryTCP(ctx, m, strings.TrimPrefix(nameserver, "tcp://"))
-	} else {
-		// 默认使用 UDP，失败时自动降级到 TCP
-		return g.queryUDP(ctx, m, nameserver)
-	}
-}
-
-// queryDoH 使用 DNS-over-HTTPS 查询
-func (g *Group) queryDoH(ctx context.Context, m *dns.Msg, url string) (*dns.Msg, error) {
-	// 使用 miekg/dns 的 DoH 客户端
-	// 需要通过 outbound 连接
-	client := &dns.Client{
-		Net:     "https",
-		Timeout: g.timeout,
-	}
-
-	// DoH 不需要端口，URL 已经包含完整地址
-	resp, _, err := client.ExchangeContext(ctx, m, url)
-	if err != nil {
-		return nil, fmt.Errorf("DoH query failed: %w", err)
-	}
-
-	return resp, nil
-}
-
-// queryDoT 使用 DNS-over-TLS 查询
-func (g *Group) queryDoT(ctx context.Context, m *dns.Msg, server string) (*dns.Msg, error) {
-	// 添加默认端口
-	if !strings.Contains(server, ":") {
-		server = net.JoinHostPort(server, "853")
-	}
-
-	client := &dns.Client{
-		Net:     "tcp-tls",
-		Timeout: g.timeout,
-		TLSConfig: &tls.Config{
-			// 从 server 地址中提取主机名作为 ServerName
-			ServerName: extractHostname(server),
-		},
-	}
-
-	resp, _, err := client.ExchangeContext(ctx, m, server)
-	if err != nil {
-		return nil, fmt.Errorf("DoT query failed: %w", err)
-	}
-
-	return resp, nil
-}
-
-// queryTCP 使用 TCP 查询
-func (g *Group) queryTCP(ctx context.Context, m *dns.Msg, server string) (*dns.Msg, error) {
-	// 添加默认端口
-	if !strings.Contains(server, ":") {
-		server = net.JoinHostPort(server, "53")
-	}
-
-	client := &dns.Client{
-		Net:     "tcp",
-		Timeout: g.timeout,
-	}
-
-	resp, _, err := client.ExchangeContext(ctx, m, server)
-	if err != nil {
-		return nil, fmt.Errorf("TCP query failed: %w", err)
-	}
-
-	return resp, nil
-}
-
-// queryUDP 使用 UDP 查询（失败时自动降级到 TCP）
-func (g *Group) queryUDP(ctx context.Context, m *dns.Msg, server string) (*dns.Msg, error) {
-	// 添加默认端口
-	if !strings.Contains(server, ":") {
-		server = net.JoinHostPort(server, "53")
-	}
-
-	client := &dns.Client{
-		Net:     "udp",
-		Timeout: g.timeout,
-	}
-
-	resp, _, err := client.ExchangeContext(ctx, m, server)
-	if err != nil {
-		// UDP 失败，尝试 TCP
-		g.logger.Debug("UDP查询失败，尝试TCP: server=%s error=%v", server, err)
-		return g.queryTCP(ctx, m, server)
-	}
-
-	// 检查响应是否被截断（TC flag）
-	if resp != nil && resp.Truncated {
-		g.logger.Debug("UDP响应被截断，使用TCP重试: server=%s", server)
-		return g.queryTCP(ctx, m, server)
-	}
-
-	return resp, nil
 }
 
 // addECS 添加 EDNS Client Subnet
@@ -262,18 +201,19 @@ func (g *Group) addECS(m *dns.Msg, ecsIP string) {
 	m.Extra = append(m.Extra, opt)
 }
 
-// extractHostname 从地址中提取主机名
-func extractHostname(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	return host
-}
-
 // SetECS 设置 ECS
 func (g *Group) SetECS(enable, force bool, ecsIP string) {
 	g.enableECS = enable
 	g.forceECS = force
 	g.ecsIP = ecsIP
+}
+
+// Close 关闭所有 upstream 连接
+func (g *Group) Close() error {
+	for _, u := range g.upstreams {
+		if closer, ok := u.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}
+	return nil
 }
