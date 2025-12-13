@@ -1,0 +1,101 @@
+port: 10053
+
+init_nameserver: 223.5.5.5
+
+upstream_group:
+  proxy:
+    nameservers:
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
+    outbound: hk
+  proxy_ecs:
+    nameservers:
+      - 8.8.8.8
+      - https://8.8.8.8/dns-query
+    outbound: hk
+  direct:
+    - system
+    - 223.5.5.5
+
+outbound:
+  - tag: hk
+    type: socks5
+    enable: true
+    server: 10.115.15.1
+    port: 7890
+    username: violet
+    password: Dd112211
+
+  - tag: us
+    type: socks5
+    enable: true
+    server: 10.115.15.1
+    port: 7890
+    username: violet
+    password: Dd112211
+
+ecs: 113.132.219.0/24
+
+cache:
+  dns_cache:
+    enable: true
+    clear: true
+    type: redis # 或 memory
+  category_cache:
+    enable: true
+    clear: true
+    type: redis # 或 memory
+
+redis:
+  server: 10.115.15.25
+  port: 6379
+  database: 7
+
+category_policy:
+  preload:
+    enable: true
+    file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
+    update: 0 0 */1 * * ?
+    domain_group:
+      proxy_site:
+        - google
+        - geolocation-!cn
+        - geolocation-cn@!cn
+      direct_site:
+        - cn
+      game_domain:
+        - category-games
+      ads_site:
+        - category-ads-all
+
+query_policy:
+  - ads_site:
+      group: block
+      options:
+        block_type: NoError # 可选 0.0.0.0 、 NxDomain
+  - proxy_site:
+      group: proxy
+      options:
+        disable_https: true
+        disable_cache: true
+        disable_ipv4: true
+        disable_ipv6: false
+        priority: ipv4 # ipv6
+  - direct_site:
+      group: direct
+      options:
+        priority: ipv4
+      ecs: 113.132.219.0/24
+  - game_domain: direct
+  - unknown: proxy_ecs_fallback
+
+fallback:
+  geoip: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat'
+  asn: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb'
+  update: 0 0 */1 * * ?
+  rule:
+    - geoip:cn
+    - asn:4134
+
+log:
+  level: debug
