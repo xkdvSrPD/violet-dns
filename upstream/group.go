@@ -143,8 +143,12 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 			if res.err == nil && res.resp != nil {
 				// DEBUG: 记录成功的响应
 				g.logger.LogUpstreamResponse(ctx, domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
-				g.logger.Debug("使用Nameserver响应: nameserver=%s group=%s total_latency=%v",
-					res.nameserver, g.name, time.Since(startTime))
+
+				// DEBUG: 记录详细的响应数据
+				responseDetails := formatDNSResponse(res.resp)
+				g.logger.Debug("收到上游返回数据: nameserver=%s group=%s total_latency=%v response=%s",
+					res.nameserver, g.name, time.Since(startTime), responseDetails)
+
 				return res.resp, nil
 			}
 			lastErr = res.err
@@ -156,6 +160,88 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 
 	g.logger.Debug("所有Nameserver查询失败: group=%s domain=%s last_error=%v", g.name, domain, lastErr)
 	return nil, fmt.Errorf("所有 nameserver 查询失败: %v", lastErr)
+}
+
+// formatDNSResponse 格式化 DNS 响应为可读字符串
+func formatDNSResponse(msg *dns.Msg) string {
+	if msg == nil {
+		return "nil"
+	}
+
+	var parts []string
+
+	// Rcode
+	parts = append(parts, fmt.Sprintf("rcode=%s", dns.RcodeToString[msg.Rcode]))
+
+	// Answer 记录
+	if len(msg.Answer) > 0 {
+		answers := make([]string, 0, len(msg.Answer))
+		for _, rr := range msg.Answer {
+			answers = append(answers, formatRR(rr))
+		}
+		parts = append(parts, fmt.Sprintf("answers=[%s]", strings.Join(answers, "; ")))
+	} else {
+		parts = append(parts, "answers=[]")
+	}
+
+	// Authority 记录
+	if len(msg.Ns) > 0 {
+		ns := make([]string, 0, len(msg.Ns))
+		for _, rr := range msg.Ns {
+			ns = append(ns, formatRR(rr))
+		}
+		parts = append(parts, fmt.Sprintf("authority=[%s]", strings.Join(ns, "; ")))
+	}
+
+	// Additional 记录（排除 OPT）
+	if len(msg.Extra) > 0 {
+		extra := make([]string, 0)
+		for _, rr := range msg.Extra {
+			if rr.Header().Rrtype != dns.TypeOPT {
+				extra = append(extra, formatRR(rr))
+			}
+		}
+		if len(extra) > 0 {
+			parts = append(parts, fmt.Sprintf("additional=[%s]", strings.Join(extra, "; ")))
+		}
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// formatRR 格式化单条 RR 记录
+func formatRR(rr dns.RR) string {
+	hdr := rr.Header()
+	rrType := dns.TypeToString[hdr.Rrtype]
+
+	var value string
+	switch rr := rr.(type) {
+	case *dns.A:
+		value = rr.A.String()
+	case *dns.AAAA:
+		value = rr.AAAA.String()
+	case *dns.CNAME:
+		value = rr.Target
+	case *dns.MX:
+		value = fmt.Sprintf("preference=%d mail=%s", rr.Preference, rr.Mx)
+	case *dns.NS:
+		value = rr.Ns
+	case *dns.PTR:
+		value = rr.Ptr
+	case *dns.SOA:
+		value = fmt.Sprintf("mname=%s rname=%s", rr.Ns, rr.Mbox)
+	case *dns.TXT:
+		value = strings.Join(rr.Txt, " ")
+	case *dns.SRV:
+		value = fmt.Sprintf("priority=%d weight=%d port=%d target=%s", rr.Priority, rr.Weight, rr.Port, rr.Target)
+	default:
+		// 其他类型，使用通用格式
+		value = strings.TrimPrefix(rr.String(), hdr.String())
+		value = strings.TrimSpace(value)
+	}
+
+	// 格式: [类型] 域名 (TTL=X秒) -> 值
+	return fmt.Sprintf("[%s] %s (ttl=%ds) -> %s", rrType, hdr.Name, hdr.Ttl, value)
 }
 
 // addECS 添加 EDNS Client Subnet

@@ -31,7 +31,8 @@ upstream_group:
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:
     nameservers:
-      - https://8.8.8.8/dns-query
+      - https://n.xns.one/nK92WKAW_0A/dns-query
+      - https://v.xns.one/nK92WKAW_0A/dns-query
     outbound: hk
     strategy: prefer_ipv4
     concurrent_queries: true
@@ -43,9 +44,6 @@ upstream_group:
   direct:
     nameservers:
       - system  # Use system resolver
-      - 223.5.5.5  # Alibaba DNS
-      - 119.29.29.29  # Tencent DNS
-      - https://223.6.6.6/dns-query  # Alibaba DoH
     strategy: prefer_ipv4
     concurrent_queries: true
     enable_ecs: true
@@ -86,7 +84,7 @@ ecs:
 cache:
   dns_cache:
     enable: true
-    clear: false  # IMPORTANT: Don't clear in production
+    clear: true  # IMPORTANT: Don't clear in production
     type: redis  # or: memory
     algorithm: arc  # Adaptive Replacement Cache (better than LRU)
     max_ttl: 86400  # Maximum cache TTL (24 hours)
@@ -96,7 +94,7 @@ cache:
 
   category_cache:
     enable: true
-    clear: false
+    clear: true
     type: redis
     ttl: 604800  # 7 days (categories rarely change)
 
@@ -115,7 +113,6 @@ category_policy:
   preload:
     enable: false
     file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
-    update: '0 0 2 * * *'  # Update at 2 AM daily
     domain_group:
       proxy_site:
         - google
@@ -196,7 +193,7 @@ performance:
 
 # Logging Configuration
 log:
-  level: info  # debug, info, warn, error
+  level: debug  # debug, info, warn, error
   format: json  # or: text
   output: stdout  # or: file path
 

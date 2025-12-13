@@ -42,7 +42,8 @@ func NewLogger(level, format string) *Logger {
 	// 设置格式
 	if format == "json" {
 		log.SetFormatter(&logrus.JSONFormatter{
-			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+			TimestampFormat:   "2006-01-02T15:04:05.000Z07:00",
+			DisableHTMLEscape: true, // 禁用 HTML 转义，避免 > 被转义为 \u003e
 			FieldMap: logrus.FieldMap{
 				logrus.FieldKeyTime:  "time",
 				logrus.FieldKeyLevel: "level",
