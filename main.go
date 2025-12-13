@@ -67,11 +67,26 @@ func main() {
 	var redisClient *redis.Client
 	if cfg.Cache.DNSCache.Type == "redis" || cfg.Cache.CategoryCache.Type == "redis" {
 		redisClient = redis.NewClient(&redis.Options{
-			Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Server, cfg.Redis.Port),
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.Database,
+			Addr:         fmt.Sprintf("%s:%d", cfg.Redis.Server, cfg.Redis.Port),
+			Password:     cfg.Redis.Password,
+			DB:           cfg.Redis.Database,
+			MaxRetries:   cfg.Redis.MaxRetries,
+			PoolSize:     cfg.Redis.PoolSize,
+			DialTimeout:  cfg.Redis.Timeout,
+			ReadTimeout:  cfg.Redis.Timeout * 2, // 读取超时设为配置的 2 倍
+			WriteTimeout: cfg.Redis.Timeout * 2, // 写入超时设为配置的 2 倍
+			PoolTimeout:  cfg.Redis.Timeout * 3, // 连接池超时设为配置的 3 倍
 		})
-		fmt.Println("Redis 连接已建立")
+
+		// 测试连接
+		ctx := context.Background()
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			fmt.Printf("警告: Redis 连接测试失败: %v\n", err)
+			fmt.Println("将使用内存缓存作为后备方案")
+			redisClient = nil
+		} else {
+			fmt.Println("Redis 连接已建立并验证成功")
+		}
 	}
 
 	// 创建分类缓存
