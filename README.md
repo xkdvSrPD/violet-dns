@@ -114,3 +114,11 @@ rule必须配置
 默认下载到程序运行目录中。如果文件下载了不需要重新下载
 
 ## 执行preload
+
+
+# 参考代码
+
+/home/violet/Code/geoview/
+/home/violet/Code/sing-box/
+/home/violet/Code/Xray-core/
+/home/violet/Code/mihomo/
