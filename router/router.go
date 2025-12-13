@@ -23,8 +23,7 @@ type Router struct {
 	dnsCache      cache.DNSCache
 	categoryCache cache.CategoryCache
 	logger        *middleware.Logger
-	fallbackRules []string      // Fallback 规则
-	fallbackTTL   time.Duration // 域名分类缓存 TTL
+	fallbackRules []string // Fallback 规则
 }
 
 // NewRouter 创建新的路由器
@@ -35,10 +34,9 @@ func NewRouter(
 	categoryCache cache.CategoryCache,
 	logger *middleware.Logger,
 	fallbackRules []string,
-	fallbackTTL time.Duration,
 ) *Router {
 	return &Router{
-		matcher:       NewMatcher(),
+		matcher:       NewMatcher(categoryCache), // 传入 categoryCache
 		policies:      make([]*Policy, 0),
 		upstreamMgr:   upstreamMgr,
 		geoipMatcher:  geoipMatcher,
@@ -46,20 +44,12 @@ func NewRouter(
 		categoryCache: categoryCache,
 		logger:        logger,
 		fallbackRules: fallbackRules,
-		fallbackTTL:   fallbackTTL,
 	}
 }
 
 // AddPolicy 添加策略
 func (r *Router) AddPolicy(policy *Policy) {
 	r.policies = append(r.policies, policy)
-}
-
-// LoadDomainGroup 加载域名分组
-func (r *Router) LoadDomainGroup(domainGroups map[string][]string) {
-	for groupName, domains := range domainGroups {
-		r.matcher.AddDomains(domains, groupName)
-	}
 }
 
 // Route 路由查询

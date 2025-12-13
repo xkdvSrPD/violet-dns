@@ -13,7 +13,4 @@ type QueryRouter interface {
 
 	// AddPolicy 添加策略
 	AddPolicy(policy *Policy)
-
-	// LoadDomainGroup 加载域名分组
-	LoadDomainGroup(domainGroups map[string][]string)
 }

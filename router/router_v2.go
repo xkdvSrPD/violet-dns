@@ -23,8 +23,7 @@ type RouterV2 struct {
 	dnsCache      cache.DNSCacheV2 // 使用新的 RR 级别缓存
 	categoryCache cache.CategoryCache
 	logger        *middleware.Logger
-	fallbackRules []string      // Fallback 规则
-	fallbackTTL   time.Duration // 域名分类缓存 TTL
+	fallbackRules []string // Fallback 规则
 }
 
 // NewRouterV2 创建新的路由器
@@ -35,10 +34,9 @@ func NewRouterV2(
 	categoryCache cache.CategoryCache,
 	logger *middleware.Logger,
 	fallbackRules []string,
-	fallbackTTL time.Duration,
 ) *RouterV2 {
 	return &RouterV2{
-		matcher:       NewMatcher(),
+		matcher:       NewMatcher(categoryCache), // 传入 categoryCache
 		policies:      make([]*Policy, 0),
 		upstreamMgr:   upstreamMgr,
 		geoipMatcher:  geoipMatcher,
@@ -46,20 +44,12 @@ func NewRouterV2(
 		categoryCache: categoryCache,
 		logger:        logger,
 		fallbackRules: fallbackRules,
-		fallbackTTL:   fallbackTTL,
 	}
 }
 
 // AddPolicy 添加策略
 func (r *RouterV2) AddPolicy(policy *Policy) {
 	r.policies = append(r.policies, policy)
-}
-
-// LoadDomainGroup 加载域名分组
-func (r *RouterV2) LoadDomainGroup(domainGroups map[string][]string) {
-	for groupName, domains := range domainGroups {
-		r.matcher.AddDomains(domains, groupName)
-	}
 }
 
 // Route 路由查询（支持 CNAME 链部分缓存）

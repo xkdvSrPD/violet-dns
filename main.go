@@ -171,7 +171,6 @@ func main() {
 	}
 
 	// 6. 初始化 RouterV2（支持 CNAME 链部分缓存）
-	categoryTTL := time.Duration(cfg.Cache.CategoryCache.TTL) * time.Second
 	queryRouter := router.NewRouterV2(
 		upstreamMgr,
 		geoipMatcher,
@@ -179,14 +178,7 @@ func main() {
 		categoryCache,
 		logger,
 		cfg.Fallback.Rule, // fallback 规则
-		categoryTTL,       // 域名分类缓存 TTL
 	)
-
-	// 加载域名分组
-	parser := category.NewParser()
-	dlcData, _ := parser.Parse("dlc.dat")
-	domainGroups, _ := parser.ParseDomainGroup(dlcData, cfg.CategoryPolicy.Preload.DomainGroup)
-	queryRouter.LoadDomainGroup(domainGroups)
 
 	// 加载策略
 	for _, policyCfg := range cfg.QueryPolicy {
