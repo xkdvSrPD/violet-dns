@@ -26,7 +26,6 @@ upstream_group:
     strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
     concurrent_queries: true  # Query A and AAAA in parallel
     enable_ecs: false  # Don't send ECS to foreign DNS for privacy
-    retry: 2
     timeout: 5s
     fallback_on_error: true
 
@@ -41,7 +40,6 @@ upstream_group:
     concurrent_queries: true
     force_ecs: true
     ecs_ip: 1.1.1.0/24  # Per-group ECS configuration
-    retry: 2
     timeout: 5s
 
   # Domestic DNS (direct connection)
@@ -55,16 +53,7 @@ upstream_group:
     concurrent_queries: true
     enable_ecs: true
     ecs_ip: 113.132.219.0/24
-    retry: 1  # CN DNS is reliable, less retry needed
     timeout: 3s
-    # Anti-poisoning: Expect CN IPs only
-    expected_ips:
-      - geoip:cn
-      - geoip:private
-    reject_ips:  # Known poisoned/bogon IPs
-      - 0.0.0.0/8
-      - 127.0.0.0/8
-      - 240.0.0.0/4
 
 # Outbound (SOCKS5 Proxies)
 outbound:
@@ -96,7 +85,6 @@ ecs:
   default_ipv6: 2001:da8::/96
   ipv4_prefix: 24  # Send /24 prefix (hides last octet for privacy)
   ipv6_prefix: 96  # Send /96 prefix
-  override: false  # Don't override if client already sent ECS
 
 # Cache Configuration
 cache:
@@ -105,8 +93,6 @@ cache:
     clear: false  # IMPORTANT: Don't clear in production
     type: redis  # or: memory
     algorithm: arc  # Adaptive Replacement Cache (better than LRU)
-    size: 10000  # Max entries (memory limit)
-    min_ttl: 60  # Minimum cache TTL (prevent churn)
     max_ttl: 86400  # Maximum cache TTL (24 hours)
     serve_stale: true  # Return stale data if upstream fails
     stale_ttl: 3600  # Keep stale entries for 1 hour
@@ -116,7 +102,6 @@ cache:
     enable: true
     clear: false
     type: redis
-    size: 50000  # Domain categories are larger
     ttl: 604800  # 7 days (categories rarely change)
 
 # Redis Configuration
@@ -150,29 +135,21 @@ category_policy:
         - category-games
       ads_site:
         - category-ads-all
-      tracker_site:
-        - category-tracker
-      malware_site:
-        - category-malware
 
 # Query Routing Policy (matched top-down)
 query_policy:
+  # Game domains (low latency needed)
+  - name: game_domain
+    group: direct
+    options:
+      protocol: udp  # Prefer UDP for low latency
+      disable_cache: true  # Always get fresh IPs
+
   # Block ads and trackers
   - name: ads_site
     group: block
     options:
       block_type: nxdomain  # or: noerror, 0.0.0.0
-
-  - name: tracker_site
-    group: block
-    options:
-      block_type: 0.0.0.0
-
-  # Block malware domains
-  - name: malware_site
-    group: block
-    options:
-      block_type: nxdomain
 
   # Foreign sites through proxy
   - name: proxy_site
@@ -183,6 +160,8 @@ query_policy:
       rewrite_ttl: 3600  # Override TTL to 1 hour
       expected_ips:  # Only accept non-CN IPs
         - geoip:!cn
+        - geoip:private
+      fallback_group: direct
 
   # Domestic sites direct
   - name: direct_site
@@ -192,17 +171,6 @@ query_policy:
       ecs: 113.132.219.0/24  # Per-policy ECS override
       expected_ips:
         - geoip:cn
-        - geoip:private
-      reject_ips:
-        - 0.0.0.0/8
-        - 127.0.0.0/8
-
-  # Game domains (low latency needed)
-  - name: game_domain
-    group: direct
-    options:
-      protocol: udp  # Prefer UDP for low latency
-      disable_cache: true  # Always get fresh IPs
 
   # Unknown domains: intelligent fallback
   - name: unknown

@@ -6,6 +6,152 @@ Based on analysis of production-grade DNS implementations (sing-box, Xray-core, 
 
 ---
 
+## 配置变化说明 (Configuration Changes)
+
+### 主要变化
+
+#### 1. `query_policy` 新增 `fallback_group` 选项
+
+**变化前**:
+```yaml
+query_policy:
+  - name: proxy_site
+    group: proxy
+    options:
+      expected_ips:
+        - geoip:!cn
+```
+
+**变化后**:
+```yaml
+query_policy:
+  - name: proxy_site
+    group: proxy
+    options:
+      expected_ips:
+        - geoip:!cn
+        - geoip:private
+      fallback_group: direct  # 新增: 指定回退组
+```
+
+**行为变化**:
+- **旧行为**: 如果返回的 IP 不符合 `expected_ips`,继续匹配下一个 query_policy
+- **新行为**: 如果返回的 IP 不符合 `expected_ips` 且配置了 `fallback_group`,使用指定的组重新查询(最终结果)
+
+#### 2. `upstream_group` 移除 `retry` 字段
+
+**变化前**:
+```yaml
+upstream_group:
+  proxy:
+    nameservers:
+      - https://1.1.1.1/dns-query
+    retry: 2  # 已移除
+    timeout: 5s
+```
+
+**变化后**:
+```yaml
+upstream_group:
+  proxy:
+    nameservers:
+      - https://1.1.1.1/dns-query
+    timeout: 5s
+    fallback_on_error: true  # 新增: 错误时自动回退
+```
+
+**理由**: 重试逻辑由 `fallback_on_error` 统一处理,避免配置混淆
+
+#### 3. `upstream_group.direct` 移除 `expected_ips` 和 `reject_ips`
+
+**变化前**:
+```yaml
+upstream_group:
+  direct:
+    nameservers:
+      - 223.5.5.5
+    expected_ips:
+      - geoip:cn
+    reject_ips:
+      - 0.0.0.0/8
+```
+
+**变化后**:
+```yaml
+upstream_group:
+  direct:
+    nameservers:
+      - 223.5.5.5
+    # expected_ips 和 reject_ips 移到 query_policy 中
+```
+
+**理由**: IP 验证应该在 `query_policy` 层面进行,而不是在 `upstream_group` 层面,这样更灵活
+
+#### 4. `cache.dns_cache` 移除 `size` 和 `min_ttl` 字段
+
+**变化前**:
+```yaml
+cache:
+  dns_cache:
+    enable: true
+    type: redis
+    algorithm: arc
+    size: 10000      # 已移除
+    min_ttl: 60      # 已移除
+    max_ttl: 86400
+```
+
+**变化后**:
+```yaml
+cache:
+  dns_cache:
+    enable: true
+    type: redis
+    algorithm: arc
+    max_ttl: 86400
+    serve_stale: true
+    stale_ttl: 3600
+    negative_ttl: 300
+```
+
+**理由**:
+- `size`: Redis 缓存不需要客户端管理大小
+- `min_ttl`: 直接遵守上游 DNS 的 TTL,不强制修改
+
+#### 5. `query_policy` 移除部分域名组
+
+**变化前**:
+```yaml
+category_policy:
+  preload:
+    domain_group:
+      tracker_site:
+        - category-tracker
+      malware_site:
+        - category-malware
+
+query_policy:
+  - name: tracker_site
+    group: block
+  - name: malware_site
+    group: block
+```
+
+**变化后**:
+```yaml
+category_policy:
+  preload:
+    domain_group:
+      # tracker_site 和 malware_site 已移除
+
+query_policy:
+  # 对应的 policy 也已移除
+```
+
+**理由**: 简化配置,只保留必要的域名分类(proxy_site, direct_site, game_domain, ads_site)
+
+---
+
 ## Critical Issues Fixed
 
 ### 1. Configuration Consistency
@@ -47,7 +193,8 @@ Application Layer
 │         Query Router                │
 │  - Domain matching (trie)           │
 │  - Policy selection                 │
-│  - Fallback chain                   │
+│  - Fallback chain (新增)            │
+│  - IP validation & fallback_group   │
 └──────────────┬──────────────────────┘
                ↓
 ┌─────────────────────────────────────┐
@@ -63,7 +210,7 @@ Application Layer
 │  - Group-based concurrent queries   │
 │  - ECS injection                    │
 │  - Retry logic                      │
-│  - IP filtering                     │
+│  - IP filtering (expected_ips)      │
 └──────────────┬──────────────────────┘
                ↓
 ┌─────────────────────────────────────┐
@@ -81,31 +228,283 @@ Application Layer
 └─────────────────────────────────────┘
 ```
 
+### Query Router 详细流程
+
+```
+收到 DNS 查询请求
+  ↓
+┌────────────────────────────────────┐
+│ 1. Domain Matching                 │
+│    - 自上而下匹配 query_policy      │
+│    - 使用 trie 结构快速匹配         │
+└──────────┬─────────────────────────┘
+           ↓
+┌────────────────────────────────────┐
+│ 2. 使用匹配到的 group 查询          │
+│    - 并发查询组内所有 nameserver    │
+│    - 选择最快响应                   │
+└──────────┬─────────────────────────┘
+           ↓
+┌────────────────────────────────────┐
+│ 3. IP Validation                   │
+│    - 检查 expected_ips 规则         │
+│    - 匹配 geoip/asn 数据库          │
+└──────────┬─────────────────────────┘
+           ↓
+     符合 expected_ips?
+           │
+    ┌──────┴──────┐
+    是             否
+    ↓              ↓
+ 返回结果    配置了 fallback_group?
+                   │
+            ┌──────┴──────┐
+            是             否
+            ↓              ↓
+    ┌────────────┐  ┌────────────┐
+    │ 使用        │  │ 继续匹配    │
+    │ fallback_  │  │ 下一个      │
+    │ group      │  │ query_      │
+    │ 重新查询    │  │ policy      │
+    │ (最终结果)  │  └──────┬─────┘
+    └──────┬─────┘         ↓
+           ↓         所有都不匹配?
+    ┌────────────┐         ↓
+    │ 不再进行    │  使用 unknown 的
+    │ IP 验证,   │  proxy_ecs_fallback
+    │ 直接返回    │  (并发查询策略)
+    └────────────┘
+```
+
 ---
 
 ## Key Optimizations
 
-### 1. Concurrent Fallback Strategy
+### 1. 智能回退策略 (Intelligent Fallback Strategy)
 
-**Old Design** (Sequential):
+#### 1.1 Query Policy 回退机制
+
+**新增配置项**: `expected_ips` 和 `fallback_group`
+
+**查询流程**:
 ```
-proxy_ecs query (3s)
-  ↓ if not match
-proxy query (3s)
+收到查询请求
   ↓
-Total: 6s worst case
+匹配 query_policy (自上而下)
+  ↓
+使用匹配到的 group 进行查询
+  ↓
+检查返回的 IP 是否符合 expected_ips
+  ↓
+├─ 符合 expected_ips → 返回结果
+│
+├─ 不符合 expected_ips:
+│  ├─ 如果配置了 fallback_group → 使用 fallback_group 重新查询(最终结果)
+│  └─ 如果没有配置 fallback_group → 继续匹配下一个 query_policy
+│
+└─ 所有 policy 都不匹配 → 使用 unknown 的 proxy_ecs_fallback
 ```
 
-**New Design** (Concurrent):
-```
-proxy_ecs query ──┐
-                  ├─→ select first valid
-proxy query ──────┘
+**配置示例**:
+```yaml
+query_policy:
+  # 外国站点通过代理
+  - name: proxy_site
+    group: proxy
+    options:
+      expected_ips:
+        - geoip:!cn      # 期望非中国 IP
+        - geoip:private  # 允许私有 IP
+      fallback_group: direct  # 如果返回中国 IP,则用 direct 重新查询
 
-Total: ~3s worst case (50% improvement)
+  # 国内站点直连
+  - name: direct_site
+    group: direct
+    options:
+      expected_ips:
+        - geoip:cn       # 期望中国 IP
+      # 没有 fallback_group,如果返回非中国 IP 则继续匹配下一个 policy
 ```
 
-**Implementation**:
+**行为说明**:
+
+1. **有 `fallback_group` 的情况**:
+   - 查询 `proxy_site` 域名,使用 `proxy` 组
+   - 如果返回中国 IP → 使用 `direct` 组重新查询
+   - `direct` 组的查询结果为**最终结果**,不再进行验证
+
+2. **无 `fallback_group` 的情况**:
+   - 查询 `direct_site` 域名,使用 `direct` 组
+   - 如果返回非中国 IP → 继续匹配下一个 query_policy
+   - 如果所有 policy 都不匹配 → 使用 `unknown` 的 `proxy_ecs_fallback`
+
+3. **`unknown` 的特殊处理**:
+   - `unknown` 始终使用 `proxy_ecs_fallback` 策略
+   - 该策略会并发查询 `proxy_ecs` 和 `proxy` 组
+   - 根据 IP 地理位置决定使用哪个结果
+
+**完整实现示例**:
+```go
+// QueryPolicy 表示查询策略配置
+type QueryPolicy struct {
+    Name          string
+    Group         string
+    Options       PolicyOptions
+}
+
+type PolicyOptions struct {
+    ExpectedIPs   []string  // 如: ["geoip:cn", "geoip:private"]
+    FallbackGroup string    // 如: "direct"
+    // ... 其他选项
+}
+
+// QueryRouter 处理查询路由逻辑
+type QueryRouter struct {
+    policies      []QueryPolicy
+    upstreamMgr   *UpstreamManager
+    geoipMatcher  *GeoIPMatcher
+}
+
+// Route 执行查询路由
+func (r *QueryRouter) Route(domain string, qtype uint16) (*dns.Msg, error) {
+    // 1. 匹配 domain 到 policy
+    for _, policy := range r.policies {
+        if !r.matchesDomain(domain, policy.Name) {
+            continue
+        }
+
+        // 2. 使用匹配到的 group 查询
+        resp, err := r.upstreamMgr.Query(policy.Group, domain, qtype)
+        if err != nil {
+            continue  // 尝试下一个 policy
+        }
+
+        // 3. 验证 IP
+        if len(policy.Options.ExpectedIPs) == 0 {
+            return resp, nil  // 没有 expected_ips,直接返回
+        }
+
+        if r.validateIPs(resp, policy.Options.ExpectedIPs) {
+            return resp, nil  // IP 符合预期,返回结果
+        }
+
+        // 4. IP 不符合预期,检查是否有 fallback_group
+        if policy.Options.FallbackGroup != "" {
+            // 使用 fallback_group 重新查询(最终结果)
+            fallbackResp, err := r.upstreamMgr.Query(
+                policy.Options.FallbackGroup,
+                domain,
+                qtype,
+            )
+            if err != nil {
+                return resp, nil  // fallback 失败,返回原结果
+            }
+            return fallbackResp, nil  // 返回 fallback 结果,不再验证
+        }
+
+        // 5. 没有 fallback_group,继续匹配下一个 policy
+        continue
+    }
+
+    // 6. 所有 policy 都不匹配,使用 unknown 的 proxy_ecs_fallback
+    return r.proxyECSFallback(domain, qtype)
+}
+
+// validateIPs 检查响应中的 IP 是否符合预期
+func (r *QueryRouter) validateIPs(resp *dns.Msg, expectedIPs []string) bool {
+    ips := extractIPs(resp.Answer)
+    if len(ips) == 0 {
+        return true  // 没有 IP(如 CNAME),视为通过
+    }
+
+    for _, ip := range ips {
+        matched := false
+        for _, rule := range expectedIPs {
+            if r.geoipMatcher.Match(ip, rule) {
+                matched = true
+                break
+            }
+        }
+        if !matched {
+            return false  // 有 IP 不符合预期
+        }
+    }
+
+    return true  // 所有 IP 都符合预期
+}
+
+// proxyECSFallback 实现 unknown 域名的并发回退策略
+func (r *QueryRouter) proxyECSFallback(domain string, qtype uint16) (*dns.Msg, error) {
+    // 详见 1.2 节的实现
+    return queryWithFallback(domain)
+}
+```
+
+**使用示例**:
+```yaml
+query_policy:
+  # 示例 1: 有 fallback_group
+  - name: proxy_site
+    group: proxy
+    options:
+      expected_ips:
+        - geoip:!cn
+        - geoip:private
+      fallback_group: direct
+
+  # 查询流程:
+  # 1. 匹配到 proxy_site,使用 proxy 组查询
+  # 2. 如果返回中国 IP → 使用 direct 组重新查询(最终结果)
+  # 3. 如果返回外国 IP → 直接返回
+
+  # 示例 2: 无 fallback_group
+  - name: direct_site
+    group: direct
+    options:
+      expected_ips:
+        - geoip:cn
+      # 没有 fallback_group
+
+  # 查询流程:
+  # 1. 匹配到 direct_site,使用 direct 组查询
+  # 2. 如果返回中国 IP → 直接返回
+  # 3. 如果返回外国 IP → 继续匹配下一个 policy
+  # 4. 如果所有 policy 都不匹配 → 使用 unknown 的 proxy_ecs_fallback
+
+  # 示例 3: 游戏域名(无 expected_ips)
+  - name: game_domain
+    group: direct
+    options:
+      protocol: udp
+      disable_cache: true
+      # 没有 expected_ips,不进行 IP 验证
+
+  # 查询流程:
+  # 1. 匹配到 game_domain,使用 direct 组查询
+  # 2. 直接返回结果(不验证 IP)
+```
+
+#### 1.2 Concurrent Fallback Strategy (原 proxy_ecs_fallback)
+
+**旧设计** (顺序):
+```
+proxy_ecs 查询 (3s)
+  ↓ 如果不匹配
+proxy 查询 (3s)
+  ↓
+总耗时: 最差 6s
+```
+
+**新设计** (并发):
+```
+proxy_ecs 查询 ──┐
+                  ├─→ 选择第一个有效结果
+proxy 查询 ──────┘
+
+总耗时: 最差 ~3s (50% 改进)
+```
+
+**实现**:
 ```go
 type FallbackResult struct {
     response *dns.Msg
@@ -116,7 +515,7 @@ func queryWithFallback(domain string) (*dns.Msg, error) {
     proxyECSChan := make(chan *dns.Msg, 1)
     proxyChan := make(chan *dns.Msg, 1)
 
-    // Launch both concurrently
+    // 并发启动两个查询
     go func() {
         resp, _ := queryGroup("proxy_ecs", domain)
         proxyECSChan <- resp
@@ -127,24 +526,24 @@ func queryWithFallback(domain string) (*dns.Msg, error) {
         proxyChan <- resp
     }()
 
-    // Wait for proxy_ecs with timeout
+    // 等待 proxy_ecs 结果(带超时)
     select {
     case resp := <-proxyECSChan:
         if resp != nil && matchesGeoIPRule(resp.Answer) {
-            // CN IP detected, use direct DNS
+            // 检测到中国 IP,使用 direct DNS
             return queryGroup("direct", domain)
         }
-        // Foreign IP, wait for proxy result or use this
+        // 外国 IP,等待 proxy 结果或使用当前结果
         select {
         case proxyResp := <-proxyChan:
             return proxyResp, nil
         case <-time.After(100 * time.Millisecond):
-            // Proxy too slow, use proxy_ecs result
+            // Proxy 太慢,使用 proxy_ecs 结果
             return resp, nil
         }
 
     case <-time.After(3 * time.Second):
-        // proxy_ecs timeout, use proxy result
+        // proxy_ecs 超时,使用 proxy 结果
         return <-proxyChan, nil
     }
 }
