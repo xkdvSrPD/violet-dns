@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/miekg/dns"
 	"violet-dns/cache"
 	"violet-dns/geoip"
 	"violet-dns/middleware"
 	"violet-dns/upstream"
 	"violet-dns/utils"
+
+	"github.com/miekg/dns"
 )
 
 // Router 查询路由器
@@ -141,6 +142,16 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		r.logger.Debug("执行 proxy_ecs_fallback 策略: domain=%s", domain)
 		resp, err := r.handleProxyECSFallback(ctx, domain, qtype)
 		if err == nil {
+			// 缓存 proxy_ecs_fallback 结果
+			if !policy.Options.DisableCache {
+				ttl := r.getTTL(resp)
+				if policy.Options.RewriteTTL > 0 {
+					ttl = time.Duration(policy.Options.RewriteTTL) * time.Second
+				}
+				r.dnsCache.Set(cacheKey, resp, ttl)
+				r.logger.LogCacheSet(ctx, domain, qtype, ttl)
+			}
+
 			latency := time.Since(startTime)
 			r.logger.LogQueryComplete(ctx, domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
 		}
@@ -194,11 +205,23 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 
 				// DEBUG: 记录 fallback 后的应答
 				r.logger.LogDNSAnswer(ctx, domain, resp.Answer)
+
+				// fallback 查询成功，跳出到缓存逻辑（不再重复缓存代码）
 			} else {
 				// 继续匹配下一个策略
 				r.logger.Debug("IP验证失败且无fallback_group，回退到unknown策略: domain=%s", domain)
 				resp, err := r.handleProxyECSFallback(ctx, domain, qtype)
 				if err == nil {
+					// 缓存 proxy_ecs_fallback 结果
+					if !policy.Options.DisableCache {
+						ttl := r.getTTL(resp)
+						if policy.Options.RewriteTTL > 0 {
+							ttl = time.Duration(policy.Options.RewriteTTL) * time.Second
+						}
+						r.dnsCache.Set(cacheKey, resp, ttl)
+						r.logger.LogCacheSet(ctx, domain, qtype, ttl)
+					}
+
 					latency := time.Since(startTime)
 					r.logger.LogQueryComplete(ctx, domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
 				}

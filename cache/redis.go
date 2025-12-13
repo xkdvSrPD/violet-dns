@@ -2,7 +2,7 @@ package cache
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -33,19 +33,33 @@ func (c *RedisDNSCache) Get(key string) (*dns.Msg, bool) {
 		return nil, false
 	}
 
-	var entry CacheEntry
-	if err := json.Unmarshal(data, &entry); err != nil {
+	// 数据格式: [8字节过期时间Unix纳秒][DNS消息二进制]
+	if len(data) < 8 {
+		// 无效数据，删除
+		c.client.Del(ctx, "dns:"+key)
 		return nil, false
 	}
 
+	// 解析过期时间
+	expireNano := int64(binary.BigEndian.Uint64(data[:8]))
+	expireTime := time.Unix(0, expireNano)
+
 	// 严格检查 TTL
-	if time.Now().After(entry.ExpireTime) {
+	if time.Now().After(expireTime) {
 		// 已过期，删除
 		c.client.Del(ctx, "dns:"+key)
 		return nil, false
 	}
 
-	return entry.Response, true
+	// 解析 DNS 消息
+	msg := new(dns.Msg)
+	if err := msg.Unpack(data[8:]); err != nil {
+		// 解析失败，删除无效缓存
+		c.client.Del(ctx, "dns:"+key)
+		return nil, false
+	}
+
+	return msg, true
 }
 
 // Set 设置缓存
@@ -57,15 +71,17 @@ func (c *RedisDNSCache) Set(key string, msg *dns.Msg, ttl time.Duration) error {
 		ttl = c.maxTTL
 	}
 
-	entry := &CacheEntry{
-		Response:   msg,
-		ExpireTime: time.Now().Add(ttl),
+	// 序列化 DNS 消息为二进制格式
+	packed, err := msg.Pack()
+	if err != nil {
+		return fmt.Errorf("序列化DNS消息失败: %w", err)
 	}
 
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("序列化缓存失败: %w", err)
-	}
+	// 数据格式: [8字节过期时间Unix纳秒][DNS消息二进制]
+	expireTime := time.Now().Add(ttl)
+	data := make([]byte, 8+len(packed))
+	binary.BigEndian.PutUint64(data[:8], uint64(expireTime.UnixNano()))
+	copy(data[8:], packed)
 
 	// 设置 Redis 过期时间，严格遵守 TTL
 	if err := c.client.Set(ctx, "dns:"+key, data, ttl).Err(); err != nil {
