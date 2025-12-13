@@ -200,7 +200,7 @@ performance:
 
 # Logging Configuration
 log:
-  level: info  # debug, info, warn, error
+  level: debug  # debug, info, warn, error
   format: json  # or: text
   output: stdout  # or: file path
 
