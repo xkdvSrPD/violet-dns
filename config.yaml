@@ -125,12 +125,8 @@ category_policy:
         - google
         - geolocation-!cn
         - geolocation-cn@!cn
-        - category-scholar-!cn
       direct_site:
         - cn
-        - geolocation-cn
-        - apple-cn
-        - category-games@cn
       game_domain:
         - category-games
       ads_site:

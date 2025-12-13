@@ -20,7 +20,7 @@ type Updater struct {
 func NewUpdater(loader *Loader, cronExpr, filename string, groupConfig map[string][]string) *Updater {
 	return &Updater{
 		loader:      loader,
-		cron:        cron.New(),
+		cron:        cron.New(cron.WithSeconds()), // 支持秒字段 (6 个字段格式)
 		cronExpr:    cronExpr,
 		filename:    filename,
 		groupConfig: groupConfig,

@@ -27,13 +27,13 @@ func NewLoader(cache CategoryCache) *Loader {
 
 // Load 加载域名分类数据
 func (l *Loader) Load(filename string, domainGroupConfig map[string][]string) error {
-	// 解析 DLC 文件
+	// 解析 DLC 文件 (返回 map[string][]*router.Domain)
 	dlcData, err := l.parser.Parse(filename)
 	if err != nil {
 		return fmt.Errorf("解析 DLC 文件失败: %w", err)
 	}
 
-	// 解析域名组配置
+	// 解析域名组配置 (返回 map[string][]string)
 	domainGroups, err := l.parser.ParseDomainGroup(dlcData, domainGroupConfig)
 	if err != nil {
 		return fmt.Errorf("解析域名组配置失败: %w", err)
