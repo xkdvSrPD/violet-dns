@@ -28,40 +28,43 @@ func main() {
 	configFile := flag.String("c", "config.yaml", "配置文件路径")
 	flag.Parse()
 
+	// 先创建一个临时 logger 用于启动阶段（配置还没加载）
+	tmpLogger := middleware.NewLogger("info", "text")
+
 	// 阶段 1: 配置加载与验证
-	fmt.Println("=== 阶段 1: 配置加载与验证 ===")
-	fmt.Printf("加载配置文件: %s\n", *configFile)
+	tmpLogger.Info("=== 阶段 1: 配置加载与验证 ===")
+	tmpLogger.Info("加载配置文件: %s", *configFile)
 	cfg, err := config.LoadAndValidate(*configFile)
 	if err != nil {
-		fmt.Printf("配置加载失败: %v\n", err)
+		tmpLogger.Error("配置加载失败: %v", err)
 		os.Exit(1)
 	}
-	fmt.Println("配置加载成功")
+	tmpLogger.Info("配置加载成功")
 
 	// 阶段 2: 外部文件下载
-	fmt.Println("\n=== 阶段 2: 外部文件下载 ===")
+	tmpLogger.Info("=== 阶段 2: 外部文件下载 ===")
 	if cfg.CategoryPolicy.Preload.Enable {
 		if err := utils.DownloadFile(cfg.CategoryPolicy.Preload.File, "dlc.dat"); err != nil {
-			fmt.Printf("警告: 下载 dlc.dat 失败: %v\n", err)
+			tmpLogger.Warn("下载 dlc.dat 失败: %v", err)
 		} else {
-			fmt.Println("dlc.dat 准备就绪")
+			tmpLogger.Info("dlc.dat 准备就绪")
 		}
 	}
 
 	if err := utils.DownloadFile(cfg.Fallback.GeoIP, "geoip.dat"); err != nil {
-		fmt.Printf("警告: 下载 geoip.dat 失败: %v\n", err)
+		tmpLogger.Warn("下载 geoip.dat 失败: %v", err)
 	} else {
-		fmt.Println("geoip.dat 准备就绪")
+		tmpLogger.Info("geoip.dat 准备就绪")
 	}
 
 	if err := utils.DownloadFile(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb"); err != nil {
-		fmt.Printf("警告: 下载 GeoLite2-ASN.mmdb 失败: %v\n", err)
+		tmpLogger.Warn("下载 GeoLite2-ASN.mmdb 失败: %v", err)
 	} else {
-		fmt.Println("GeoLite2-ASN.mmdb 准备就绪")
+		tmpLogger.Info("GeoLite2-ASN.mmdb 准备就绪")
 	}
 
 	// 阶段 3: 数据预加载
-	fmt.Println("\n=== 阶段 3: 数据预加载 ===")
+	tmpLogger.Info("=== 阶段 3: 数据预加载 ===")
 
 	// 创建 Redis 客户端
 	var redisClient *redis.Client
@@ -81,11 +84,11 @@ func main() {
 		// 测试连接
 		ctx := context.Background()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
-			fmt.Printf("警告: Redis 连接测试失败: %v\n", err)
-			fmt.Println("将使用内存缓存作为后备方案")
+			tmpLogger.Warn("Redis 连接测试失败: %v", err)
+			tmpLogger.Info("将使用内存缓存作为后备方案")
 			redisClient = nil
 		} else {
-			fmt.Println("Redis 连接已建立并验证成功")
+			tmpLogger.Info("Redis 连接已建立并验证成功")
 		}
 	}
 
@@ -95,7 +98,7 @@ func main() {
 		categoryCache = cache.NewRedisCategoryCache(redisClient)
 		if cfg.Cache.CategoryCache.Clear {
 			categoryCache.Clear()
-			fmt.Println("已清空分类缓存")
+			tmpLogger.Info("已清空分类缓存")
 		}
 	} else {
 		categoryCache = cache.NewMemoryCategoryCache()
@@ -105,25 +108,25 @@ func main() {
 	if cfg.CategoryPolicy.Preload.Enable {
 		loader := category.NewLoader(categoryCache)
 		if err := loader.Load("dlc.dat", cfg.CategoryPolicy.Preload.DomainGroup); err != nil {
-			fmt.Printf("警告: 预加载域名分类失败: %v\n", err)
+			tmpLogger.Warn("预加载域名分类失败: %v", err)
 		} else {
-			fmt.Println("域名分类预加载成功")
+			tmpLogger.Info("域名分类预加载成功")
 		}
 	}
 
 	// 阶段 4: 组件初始化
-	fmt.Println("\n=== 阶段 4: 组件初始化 ===")
+	tmpLogger.Info("=== 阶段 4: 组件初始化 ===")
 
 	// 1. 初始化 Logger（需要最先初始化，其他组件会用到）
 	logger := middleware.NewLogger(cfg.Log.Level, cfg.Log.Format)
-	fmt.Println("Logger 初始化成功")
+	logger.Info("Logger 初始化成功")
 
 	// 2. 初始化 GeoIP Matcher
 	geoipMatcher, err := geoip.NewMatcher("geoip.dat", "GeoLite2-ASN.mmdb")
 	if err != nil {
-		fmt.Printf("警告: 初始化 GeoIP Matcher 失败: %v\n", err)
+		logger.Warn("初始化 GeoIP Matcher 失败: %v", err)
 	} else {
-		fmt.Println("GeoIP Matcher 初始化成功")
+		logger.Info("GeoIP Matcher 初始化成功")
 	}
 
 	// 3. 初始化 Outbound
@@ -133,10 +136,10 @@ func main() {
 		if obCfg.Type == "socks5" && obCfg.Enable {
 			ob, err := outbound.NewSOCKS5Outbound(obCfg.Server, obCfg.Port, obCfg.Username, obCfg.Password)
 			if err != nil {
-				fmt.Printf("警告: 创建 SOCKS5 出站失败: %v\n", err)
+				logger.Warn("创建 SOCKS5 出站失败: %v", err)
 			} else {
 				outbounds[obCfg.Tag] = ob
-				fmt.Printf("SOCKS5 出站 %s 创建成功\n", obCfg.Tag)
+				logger.Info("SOCKS5 出站 %s 创建成功", obCfg.Tag)
 			}
 		}
 	}
@@ -144,10 +147,10 @@ func main() {
 	// 4. 初始化 Upstream Manager
 	upstreamMgr := upstream.NewManager(logger)
 	if err := upstreamMgr.LoadFromConfig(cfg, outbounds); err != nil {
-		fmt.Printf("错误: 初始化 Upstream Manager 失败: %v\n", err)
+		logger.Error("初始化 Upstream Manager 失败: %v", err)
 		os.Exit(1)
 	}
-	fmt.Println("Upstream Manager 初始化成功")
+	logger.Info("Upstream Manager 初始化成功")
 
 	// 5. 初始化 DNS Cache
 	var dnsCache cache.DNSCache
@@ -158,12 +161,12 @@ func main() {
 		dnsCache = cache.NewRedisDNSCache(redisClient, maxTTL, cfg.Cache.DNSCache.ServeStale, staleTTL)
 		if cfg.Cache.DNSCache.Clear {
 			dnsCache.Clear()
-			fmt.Println("已清空 DNS 缓存")
+			logger.Info("已清空 DNS 缓存")
 		}
 	} else {
 		dnsCache = cache.NewMemoryDNSCache(maxTTL, cfg.Cache.DNSCache.ServeStale, staleTTL)
 	}
-	fmt.Println("DNS Cache 初始化成功")
+	logger.Info("DNS Cache 初始化成功")
 
 	// 6. 初始化 Router
 	queryRouter := router.NewRouter(upstreamMgr, geoipMatcher, dnsCache, categoryCache, logger)
@@ -179,13 +182,13 @@ func main() {
 		policy := router.NewPolicy(policyCfg.Name, policyCfg.Group, policyCfg.Options)
 		queryRouter.AddPolicy(policy)
 	}
-	fmt.Println("Query Router 初始化成功")
+	logger.Info("Query Router 初始化成功")
 
 	// 7. 初始化 Singleflight
 	singleflight := middleware.NewSingleflight()
 
 	// 阶段 5: 启动服务
-	fmt.Println("\n=== 阶段 5: 启动服务 ===")
+	logger.Info("=== 阶段 5: 启动服务 ===")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -199,9 +202,9 @@ func main() {
 			cfg.CategoryPolicy.Preload.DomainGroup,
 		)
 		if err := updater.Start(ctx); err != nil {
-			fmt.Printf("警告: 启动定时更新失败: %v\n", err)
+			logger.Warn("启动定时更新失败: %v", err)
 		} else {
-			fmt.Println("定时更新已启动")
+			logger.Info("定时更新已启动")
 		}
 	}
 
@@ -210,7 +213,7 @@ func main() {
 
 	go func() {
 		if err := dnsServer.Start(ctx); err != nil {
-			fmt.Printf("DNS 服务器错误: %v\n", err)
+			logger.Error("DNS 服务器错误: %v", err)
 			os.Exit(1)
 		}
 	}()
@@ -219,17 +222,17 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("\n=== Violet DNS Server 已启动 ===")
-	fmt.Printf("监听地址: %s:%d\n", cfg.Server.Bind, cfg.Server.Port)
-	fmt.Println("按 Ctrl+C 停止服务器")
+	logger.Info("=== Violet DNS Server 已启动 ===")
+	logger.Info("监听地址: %s:%d", cfg.Server.Bind, cfg.Server.Port)
+	logger.Info("按 Ctrl+C 停止服务器")
 
 	<-sigChan
 
-	fmt.Println("\n正在优雅关闭...")
+	logger.Info("正在优雅关闭...")
 	cancel()
 
 	// 给一些时间让正在处理的查询完成
 	time.Sleep(2 * time.Second)
 
-	fmt.Println("服务器已停止")
+	logger.Info("服务器已停止")
 }

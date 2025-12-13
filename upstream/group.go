@@ -70,8 +70,7 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 			queryLatency := time.Since(queryStart)
 
 			if err != nil {
-				g.logger.Debug("Nameserver查询失败: nameserver=%s domain=%s error=%v latency=%v",
-					nameserver, domain, err, queryLatency)
+				g.logger.LogUpstreamError(queryCtx, domain, nameserver, err, queryLatency)
 			}
 
 			resChan <- result{
@@ -90,7 +89,7 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 		case res := <-resChan:
 			if res.err == nil && res.resp != nil {
 				// DEBUG: 记录成功的响应
-				g.logger.LogUpstreamResponse(domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
+				g.logger.LogUpstreamResponse(queryCtx, domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
 				g.logger.Debug("使用Nameserver响应: nameserver=%s group=%s total_latency=%v",
 					res.nameserver, g.name, time.Since(startTime))
 				return res.resp, nil

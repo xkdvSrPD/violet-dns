@@ -69,17 +69,22 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	domain := strings.TrimSuffix(q.Name, ".")
 	clientIP := w.RemoteAddr().String()
 
+	// 生成 trace_id 并创建 context
+	traceID := middleware.NewTraceID()
+	ctx := middleware.WithTraceID(context.Background(), traceID)
+
 	// DEBUG: 记录收到查询请求
-	s.logger.Debug("收到DNS查询: client=%s domain=%s qtype=%s", clientIP, domain, dns.TypeToString[q.Qtype])
+	s.logger.LogQueryStart(ctx, clientIP, domain, q.Qtype)
 
 	// 使用 singleflight 去重
 	key := fmt.Sprintf("%s:%d", domain, q.Qtype)
 	resp, err := s.singleflight.Do(key, func() (*dns.Msg, error) {
-		return s.router.Route(context.Background(), domain, q.Qtype)
+		return s.router.Route(ctx, domain, q.Qtype)
 	})
 
 	if err != nil {
-		s.logger.Error("查询失败: client=%s domain=%s error=%v", clientIP, domain, err)
+		// ERROR: 记录查询失败
+		s.logger.LogQueryError(ctx, clientIP, domain, err)
 
 		// 返回 SERVFAIL
 		m := new(dns.Msg)
@@ -92,10 +97,6 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	// 设置查询 ID
 	resp.SetReply(r)
 	resp.Id = r.Id
-
-	// DEBUG: 记录返回响应
-	s.logger.Debug("返回DNS响应: client=%s domain=%s rcode=%s answer_count=%d",
-		clientIP, domain, dns.RcodeToString[resp.Rcode], len(resp.Answer))
 
 	// 写入响应
 	if err := w.WriteMsg(resp); err != nil {

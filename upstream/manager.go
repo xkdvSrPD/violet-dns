@@ -43,7 +43,7 @@ func (m *Manager) Query(ctx context.Context, groupName, domain string, qtype uin
 	}
 
 	// DEBUG: 记录开始上游查询
-	m.logger.LogUpstreamQuery(domain, qtype, groupName, group.nameservers)
+	m.logger.LogUpstreamQuery(ctx, domain, qtype, groupName, group.nameservers)
 
 	return group.Query(ctx, domain, qtype)
 }

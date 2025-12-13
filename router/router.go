@@ -60,21 +60,21 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 	startTime := time.Now()
 
 	// DEBUG: 记录查询开始
-	r.logger.LogQueryStart(domain, qtype)
+	r.logger.LogQueryStart(ctx, "", domain, qtype) // clientIP在上层已记录
 
 	// 1. 检查缓存
 	cacheKey := cache.GenerateCacheKey(domain, qtype)
 	if cachedResp, hit := r.dnsCache.Get(cacheKey); hit {
 		latency := time.Since(startTime)
 		// DEBUG: 缓存命中
-		r.logger.LogCacheHit(domain, qtype, time.Duration(cachedResp.Answer[0].Header().Ttl)*time.Second)
+		r.logger.LogCacheHit(ctx, domain, qtype, time.Duration(cachedResp.Answer[0].Header().Ttl)*time.Second)
 		// INFO: 记录查询完成
-		r.logger.LogQuery(domain, qtype, uint16(cachedResp.Rcode), true, latency, "cache", len(cachedResp.Answer))
+		r.logger.LogQueryComplete(ctx, domain, qtype, uint16(cachedResp.Rcode), true, latency, "cache", len(cachedResp.Answer))
 		return cachedResp, nil
 	}
 
 	// DEBUG: 缓存未命中
-	r.logger.LogCacheMiss(domain, qtype)
+	r.logger.LogCacheMiss(ctx, domain, qtype)
 
 	// 2. 匹配域名分组
 	groupName, matched := r.matcher.Match(domain)
@@ -83,7 +83,7 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 	}
 
 	// DEBUG: 记录分类匹配
-	r.logger.LogCategoryMatch(domain, groupName, matched)
+	r.logger.LogCategoryMatch(ctx, domain, groupName, matched)
 
 	// 3. 查找对应的策略
 	var policy *Policy
@@ -104,7 +104,7 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 	}
 
 	// DEBUG: 记录策略匹配
-	r.logger.LogPolicyMatch(domain, policy.Name, policy.Group, true)
+	r.logger.LogPolicyMatch(ctx, domain, policy.Name, policy.Group)
 
 	// DEBUG: 记录策略选项（如果有）
 	if len(policy.Options.ExpectedIPs) > 0 || policy.Options.FallbackGroup != "" || policy.Options.DisableCache || policy.Options.RewriteTTL > 0 {
@@ -121,12 +121,12 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		if policy.Options.RewriteTTL > 0 {
 			options["rewrite_ttl"] = policy.Options.RewriteTTL
 		}
-		r.logger.LogPolicyOptions(domain, options)
+		r.logger.LogPolicyOptions(ctx, domain, options)
 	}
 
 	// 4. 处理 block 策略
 	if policy.Group == "block" {
-		r.logger.LogBlock(domain, qtype, policy.Options.BlockType)
+		r.logger.LogBlock(ctx, domain, qtype, policy.Options.BlockType)
 		return r.handleBlock(ctx, domain, qtype, policy.Options.BlockType)
 	}
 
@@ -136,7 +136,7 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		resp, err := r.handleProxyECSFallback(ctx, domain, qtype)
 		if err == nil {
 			latency := time.Since(startTime)
-			r.logger.LogQuery(domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
+			r.logger.LogQueryComplete(ctx, domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
 		}
 		return resp, err
 	}
@@ -145,14 +145,14 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 	r.logger.Debug("执行普通查询: domain=%s group=%s", domain, policy.Group)
 	resp, err := r.upstreamMgr.Query(ctx, policy.Group, domain, qtype)
 	if err != nil {
-		r.logger.LogError("上游查询失败", domain, err, map[string]interface{}{
+		r.logger.LogError(ctx, "上游查询失败", domain, err, map[string]interface{}{
 			"upstream_group": policy.Group,
 		})
 		return nil, err
 	}
 
 	// DEBUG: 记录 DNS 应答
-	r.logger.LogDNSAnswer(domain, resp.Answer)
+	r.logger.LogDNSAnswer(ctx, domain, resp.Answer)
 
 	// 7. 验证 expected_ips
 	if len(policy.Options.ExpectedIPs) > 0 {
@@ -166,35 +166,35 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		}
 
 		// DEBUG: 记录 IP 验证
-		r.logger.LogIPValidation(domain, ipStrs, policy.Options.ExpectedIPs, validated)
+		r.logger.LogIPValidation(ctx, domain, ipStrs, policy.Options.ExpectedIPs, validated)
 
 		if !validated {
 			// IP 不符合预期
 			if policy.Options.FallbackGroup != "" {
 				// 使用 fallback_group 重新查询
-				r.logger.LogFallback(domain, policy.Group, policy.Options.FallbackGroup, "IP不符合expected_ips")
-				r.logger.LogFallbackDetail(domain, policy.Group, policy.Options.FallbackGroup, "IP不符合expected_ips", map[string]interface{}{
-					"actual_ips":   ips,
+				r.logger.LogFallback(ctx, domain, policy.Group, policy.Options.FallbackGroup, "IP不符合expected_ips")
+				r.logger.LogFallbackDetail(ctx, domain, policy.Group, policy.Options.FallbackGroup, "IP不符合expected_ips", map[string]interface{}{
+					"actual_ips":   ipStrs,
 					"expected_ips": policy.Options.ExpectedIPs,
 				})
 
 				resp, err = r.upstreamMgr.Query(ctx, policy.Options.FallbackGroup, domain, qtype)
 				if err != nil {
-					r.logger.LogError("Fallback查询失败", domain, err, map[string]interface{}{
+					r.logger.LogError(ctx, "Fallback查询失败", domain, err, map[string]interface{}{
 						"fallback_group": policy.Options.FallbackGroup,
 					})
 					return nil, err
 				}
 
 				// DEBUG: 记录 fallback 后的应答
-				r.logger.LogDNSAnswer(domain, resp.Answer)
+				r.logger.LogDNSAnswer(ctx, domain, resp.Answer)
 			} else {
 				// 继续匹配下一个策略
 				r.logger.Debug("IP验证失败且无fallback_group，回退到unknown策略: domain=%s", domain)
 				resp, err := r.handleProxyECSFallback(ctx, domain, qtype)
 				if err == nil {
 					latency := time.Since(startTime)
-					r.logger.LogQuery(domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
+					r.logger.LogQueryComplete(ctx, domain, qtype, uint16(resp.Rcode), false, latency, "proxy_ecs_fallback", len(resp.Answer))
 				}
 				return resp, err
 			}
@@ -210,12 +210,12 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		r.dnsCache.Set(cacheKey, resp, ttl)
 
 		// DEBUG: 记录缓存写入
-		r.logger.LogCacheSet(domain, qtype, ttl)
+		r.logger.LogCacheSet(ctx, domain, qtype, ttl)
 	}
 
 	latency := time.Since(startTime)
 	// INFO: 记录查询完成
-	r.logger.LogQuery(domain, qtype, uint16(resp.Rcode), false, latency, policy.Group, len(resp.Answer))
+	r.logger.LogQueryComplete(ctx, domain, qtype, uint16(resp.Rcode), false, latency, policy.Group, len(resp.Answer))
 
 	return resp, nil
 }
@@ -240,7 +240,7 @@ func (r *Router) handleBlock(ctx context.Context, domain string, qtype uint16, b
 // handleProxyECSFallback 处理 proxy_ecs_fallback 策略
 func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtype uint16) (*dns.Msg, error) {
 	// DEBUG: 记录开始执行 proxy_ecs_fallback
-	r.logger.LogProxyECSFallback(domain, "开始并发查询", map[string]interface{}{
+	r.logger.LogProxyECSFallback(ctx, domain, "开始并发查询", map[string]interface{}{
 		"groups": []string{"proxy_ecs", "proxy"},
 	})
 
@@ -276,28 +276,28 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 			if res.from == "proxy_ecs" {
 				proxyECSResp = res.resp
 				if res.err != nil {
-					r.logger.LogProxyECSFallback(domain, "proxy_ecs查询失败", map[string]interface{}{
+					r.logger.LogProxyECSFallback(ctx, domain, "proxy_ecs查询失败", map[string]interface{}{
 						"error": res.err.Error(),
 					})
 				} else {
-					r.logger.LogProxyECSFallback(domain, "proxy_ecs查询成功", map[string]interface{}{
+					r.logger.LogProxyECSFallback(ctx, domain, "proxy_ecs查询成功", map[string]interface{}{
 						"answer_count": len(proxyECSResp.Answer),
 					})
 				}
 			} else {
 				proxyResp = res.resp
 				if res.err != nil {
-					r.logger.LogProxyECSFallback(domain, "proxy查询失败", map[string]interface{}{
+					r.logger.LogProxyECSFallback(ctx, domain, "proxy查询失败", map[string]interface{}{
 						"error": res.err.Error(),
 					})
 				} else {
-					r.logger.LogProxyECSFallback(domain, "proxy查询成功", map[string]interface{}{
+					r.logger.LogProxyECSFallback(ctx, domain, "proxy查询成功", map[string]interface{}{
 						"answer_count": len(proxyResp.Answer),
 					})
 				}
 			}
 		case <-timeout:
-			r.logger.LogProxyECSFallback(domain, "查询超时", map[string]interface{}{
+			r.logger.LogProxyECSFallback(ctx, domain, "查询超时", map[string]interface{}{
 				"timeout": "3s",
 			})
 			break
@@ -314,29 +314,29 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 			ipStrs[i] = ip.String()
 		}
 
-		r.logger.LogProxyECSFallback(domain, "检查proxy_ecs结果IP", map[string]interface{}{
+		r.logger.LogProxyECSFallback(ctx, domain, "检查proxy_ecs结果IP", map[string]interface{}{
 			"ips": ipStrs,
 		})
 
 		for _, ip := range ips {
 			// 简化：假设规则是 geoip:cn
 			if r.geoipMatcher.Match(ip, "geoip:cn") {
-				r.logger.LogFallback(domain, "proxy_ecs", "direct", "检测到中国IP")
-				r.logger.LogProxyECSFallback(domain, "IP匹配中国规则，回退到direct", map[string]interface{}{
+				r.logger.LogFallback(ctx, domain, "proxy_ecs", "direct", "检测到中国IP")
+				r.logger.LogProxyECSFallback(ctx, domain, "IP匹配中国规则，回退到direct", map[string]interface{}{
 					"ip": ip,
 				})
 				return r.upstreamMgr.Query(ctx, "direct", domain, qtype)
 			}
 		}
 
-		r.logger.LogProxyECSFallback(domain, "IP未匹配中国规则", map[string]interface{}{
+		r.logger.LogProxyECSFallback(ctx, domain, "IP未匹配中国规则", map[string]interface{}{
 			"ips": ipStrs,
 		})
 	}
 
 	// 使用 proxy 结果
 	if proxyResp != nil {
-		r.logger.LogProxyECSFallback(domain, "使用proxy结果", map[string]interface{}{
+		r.logger.LogProxyECSFallback(ctx, domain, "使用proxy结果", map[string]interface{}{
 			"answer_count": len(proxyResp.Answer),
 		})
 		return proxyResp, nil
@@ -344,13 +344,13 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 
 	// 都失败了，返回 proxy_ecs 结果
 	if proxyECSResp != nil {
-		r.logger.LogProxyECSFallback(domain, "使用proxy_ecs结果（proxy失败）", map[string]interface{}{
+		r.logger.LogProxyECSFallback(ctx, domain, "使用proxy_ecs结果（proxy失败）", map[string]interface{}{
 			"answer_count": len(proxyECSResp.Answer),
 		})
 		return proxyECSResp, nil
 	}
 
-	r.logger.LogError("ProxyECSFallback全部失败", domain, fmt.Errorf("所有查询失败"), map[string]interface{}{})
+	r.logger.LogError(ctx, "ProxyECSFallback全部失败", domain, fmt.Errorf("所有查询失败"), map[string]interface{}{})
 	return nil, fmt.Errorf("所有查询失败")
 }
 
