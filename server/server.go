@@ -12,21 +12,19 @@ import (
 
 // Server DNS 服务器
 type Server struct {
-	port         int
-	bind         string
-	router       router.QueryRouter // 使用接口而非具体类型
-	logger       *middleware.Logger
-	singleflight *middleware.Singleflight
+	port   int
+	bind   string
+	router router.QueryRouter // 使用接口而非具体类型
+	logger *middleware.Logger
 }
 
 // NewServer 创建新的 DNS 服务器
-func NewServer(port int, bind string, r router.QueryRouter, logger *middleware.Logger, sf *middleware.Singleflight) *Server {
+func NewServer(port int, bind string, r router.QueryRouter, logger *middleware.Logger) *Server {
 	return &Server{
-		port:         port,
-		bind:         bind,
-		router:       r,
-		logger:       logger,
-		singleflight: sf,
+		port:   port,
+		bind:   bind,
+		router: r,
+		logger: logger,
 	}
 }
 
@@ -76,11 +74,8 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	// DEBUG: 记录收到查询请求
 	s.logger.LogQueryStart(ctx, clientIP, domain, q.Qtype)
 
-	// 使用 singleflight 去重
-	key := fmt.Sprintf("%s:%d", domain, q.Qtype)
-	resp, err := s.singleflight.Do(key, func() (*dns.Msg, error) {
-		return s.router.Route(ctx, domain, q.Qtype)
-	})
+	// 直接调用 router
+	resp, err := s.router.Route(ctx, domain, q.Qtype)
 
 	if err != nil {
 		// ERROR: 记录查询失败

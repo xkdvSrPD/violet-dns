@@ -14,7 +14,6 @@ type Config struct {
 	Fallback       FallbackConfig                  `yaml:"fallback"`
 	Performance    PerformanceConfig               `yaml:"performance"`
 	Log            LogConfig                       `yaml:"log"`
-	Validation     ValidationConfig                `yaml:"validation"`
 }
 
 // ServerConfig DNS 服务器配置
@@ -31,11 +30,9 @@ type BootstrapConfig struct {
 
 // UpstreamGroupConfig 上游 DNS 组配置
 type UpstreamGroupConfig struct {
-	Nameservers       []string `yaml:"nameservers"`
-	Outbound          string   `yaml:"outbound"`
-	Strategy          string   `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
-	ConcurrentQueries bool     `yaml:"concurrent_queries"`
-	ECSIP             string   `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
+	Nameservers []string `yaml:"nameservers"`
+	Outbound    string   `yaml:"outbound"`
+	ECSIP       string   `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
 }
 
 // OutboundConfig 出站配置
@@ -67,14 +64,9 @@ type CacheConfig struct {
 
 // DNSCacheConfig DNS 缓存配置
 type DNSCacheConfig struct {
-	Enable      bool   `yaml:"enable"`
-	Clear       bool   `yaml:"clear"`
-	Type        string `yaml:"type"`      // redis, memory
-	Algorithm   string `yaml:"algorithm"` // arc, lru
-	MaxTTL      int    `yaml:"max_ttl"`
-	ServeStale  bool   `yaml:"serve_stale"`
-	StaleTTL    int    `yaml:"stale_ttl"`
-	NegativeTTL int    `yaml:"negative_ttl"`
+	Enable bool   `yaml:"enable"`
+	Clear  bool   `yaml:"clear"`
+	Type   string `yaml:"type"` // redis, memory
 }
 
 // CategoryCacheConfig 分类缓存配置
@@ -117,14 +109,14 @@ type QueryPolicyConfig struct {
 
 // QueryPolicyOptions 查询策略选项
 type QueryPolicyOptions struct {
-	Protocol       string   `yaml:"protocol"` // auto, udp, https
+	Strategy       string   `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
 	DisableCache   bool     `yaml:"disable_cache"`
 	DisableIPv6    bool     `yaml:"disable_ipv6"`
-	RewriteTTL     int      `yaml:"rewrite_ttl"`
 	ECS            string   `yaml:"ecs"`
 	ExpectedIPs    []string `yaml:"expected_ips"`
 	FallbackGroup  string   `yaml:"fallback_group"`
 	BlockType      string   `yaml:"block_type"` // nxdomain, noerror, 0.0.0.0
+	BlockTTL       int      `yaml:"block_ttl"`  // Block record TTL in seconds
 	AutoCategorize bool     `yaml:"auto_categorize"`
 }
 
@@ -139,10 +131,7 @@ type FallbackConfig struct {
 
 // PerformanceConfig 性能配置
 type PerformanceConfig struct {
-	Singleflight         bool    `yaml:"singleflight"`
-	MaxConcurrentQueries int     `yaml:"max_concurrent_queries"`
-	Prefetch             bool    `yaml:"prefetch"`
-	PrefetchThreshold    float64 `yaml:"prefetch_threshold"`
+	MaxConcurrentQueries int `yaml:"max_concurrent_queries"`
 }
 
 // LogConfig 日志配置
@@ -150,20 +139,4 @@ type LogConfig struct {
 	Level  string `yaml:"level"`  // debug, info, warn, error
 	Format string `yaml:"format"` // json, text
 	Output string `yaml:"output"` // stdout, file path
-}
-
-// ValidationConfig 验证配置
-type ValidationConfig struct {
-	Strict            bool                     `yaml:"strict"`
-	CheckConnectivity bool                     `yaml:"check_connectivity"`
-	CheckFiles        bool                     `yaml:"check_files"`
-	Warnings          ValidationWarningsConfig `yaml:"warnings"`
-}
-
-// ValidationWarningsConfig 验证警告配置
-type ValidationWarningsConfig struct {
-	LargeDomainGroups int  `yaml:"large_domain_groups"`
-	ManyNameservers   int  `yaml:"many_nameservers"`
-	ClearCacheEnabled bool `yaml:"clear_cache_enabled"`
-	MissingRetry      bool `yaml:"missing_retry"`
 }

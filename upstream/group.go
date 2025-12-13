@@ -20,19 +20,17 @@ type Group struct {
 	nameservers []string
 	upstreams   []upstream.Upstream // AdGuard 的 upstream 实例
 	outbound    outbound.Outbound
-	strategy    string
 	timeout     time.Duration
 	ecsIP       string // 有值则添加 ECS，空则不添加
 	logger      *middleware.Logger
 }
 
 // NewGroup 创建新的上游组
-func NewGroup(name string, nameservers []string, ob outbound.Outbound, strategy string, timeout time.Duration, logger *middleware.Logger) *Group {
+func NewGroup(name string, nameservers []string, ob outbound.Outbound, timeout time.Duration, logger *middleware.Logger) *Group {
 	g := &Group{
 		name:        name,
 		nameservers: nameservers,
 		outbound:    ob,
-		strategy:    strategy,
 		timeout:     timeout,
 		logger:      logger,
 		upstreams:   make([]upstream.Upstream, 0, len(nameservers)),

@@ -67,7 +67,6 @@ func (m *Manager) LoadFromConfig(cfg *config.Config, outbounds map[string]outbou
 			name,
 			groupCfg.Nameservers,
 			ob,
-			groupCfg.Strategy,
 			defaultTimeout,
 			m.logger,
 		)

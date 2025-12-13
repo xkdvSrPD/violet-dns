@@ -21,8 +21,6 @@ upstream_group:
       - https://1.1.1.1/dns-query
       - https://8.8.8.8/dns-query
     outbound: hk
-    strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
-    concurrent_queries: true  # Query A and AAAA in parallel
 
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:
@@ -30,15 +28,12 @@ upstream_group:
       - https://n.xns.one/nK92WKAW_0A/dns-query
       - https://v.xns.one/nK92WKAW_0A/dns-query
     outbound: hk
-    strategy: prefer_ipv4
-    concurrent_queries: true
 
   # Domestic DNS (direct connection)
   direct:
     nameservers:
       - 10.115.15.1  # Use system resolver
-    strategy: prefer_ipv4
-    concurrent_queries: true
+    outbound: direct
 
 # Outbound (SOCKS5 Proxies)
 outbound:
@@ -77,11 +72,6 @@ cache:
     enable: true
     clear: true  # IMPORTANT: Don't clear in production
     type: redis  # or: memory
-    algorithm: arc  # Adaptive Replacement Cache (better than LRU)
-    max_ttl: 86400  # Maximum cache TTL (24 hours)
-    serve_stale: true  # Return stale data if upstream fails
-    stale_ttl: 3600  # Keep stale entries for 1 hour
-    negative_ttl: 300  # Cache NXDOMAIN for 5 minutes
 
   category_cache:
     enable: true
@@ -121,7 +111,7 @@ query_policy:
   - name: game_domain
     group: direct
     options:
-      protocol: udp  # Prefer UDP for low latency
+      strategy: prefer_ipv4
       disable_cache: true  # Always get fresh IPs
 
   # Block ads and trackers
@@ -129,14 +119,13 @@ query_policy:
     group: block
     options:
       block_type: nxdomain  # or: noerror, 0.0.0.0
-      ttl: 60
+      block_ttl: 60  # Block record TTL in seconds
 
   # Foreign sites through proxy
   - name: proxy_site
     group: proxy
     options:
-      protocol: auto  # Prefer DoH, fallback to UDP
-      rewrite_ttl: 3600  # Override TTL to 1 hour
+      strategy: prefer_ipv4
       expected_ips:  # Only accept non-CN IPs
         - geoip:!cn
         - geoip:private
@@ -146,7 +135,7 @@ query_policy:
   - name: direct_site
     group: direct
     options:
-      protocol: auto
+      strategy: prefer_ipv4
       ecs: 113.132.219.0/24  # Per-policy ECS override
       expected_ips:
         - geoip:cn
@@ -155,13 +144,14 @@ query_policy:
   - name: unknown
     group: proxy_ecs_fallback
     options:
+      strategy: prefer_ipv4
       auto_categorize: true  # Update category_cache based on result
 
 # Fallback Configuration (for proxy_ecs_fallback policy)
 fallback:
-  geoip: 'https://github.com/Loyalsoldier/geoip/releases/latest/download/Country.mmdb'
-  asn: 'https://github.com/Loyalsoldier/geoip/releases/latest/download/GeoLite2-ASN.mmdb'
-  update: '0 0 3 * * *'  # Update at 3 AM daily
+  geoip: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb'
+  asn: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb'
+  update: '0 0 7 * * *'  # Update at 3 AM daily
   strategy: race  # Race both proxy_ecs and proxy
   rule:
     - geoip:cn
@@ -173,22 +163,13 @@ fallback:
 
 # Performance Configuration
 performance:
-  singleflight: true  # Deduplicate concurrent identical queries
   max_concurrent_queries: 1000  # Prevent query storm
-  prefetch: true  # Refresh cache before TTL expires (optional)
-  prefetch_threshold: 0.1  # Refresh when 10% TTL remaining
 
 # Logging Configuration
 log:
   level: info  # debug, info, warn, error
   format: json  # or: text
   output: stdout  # or: file path
-
-# Configuration Validation
-validation:
-  strict: true  # Fail on unknown config keys
-  check_connectivity: true  # Test nameservers on startup
-  check_files: true  # Verify geoip/dlc files downloadable
 
   warnings:
     large_domain_groups: 10000  # Warn if group >10k domains

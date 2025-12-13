@@ -26,7 +26,28 @@ import (
 func main() {
 	// 解析命令行参数
 	configFile := flag.String("c", "config.yaml", "配置文件路径")
+	runtimeDir := flag.String("d", "", "运行目录（配置文件和数据文件的目录）")
 	flag.Parse()
+
+	// 如果指定了运行目录，切换到该目录并查找配置文件
+	if *runtimeDir != "" {
+		// 切换到运行目录
+		if err := os.Chdir(*runtimeDir); err != nil {
+			fmt.Printf("切换到运行目录失败: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 查找 config.yaml 或 config.yml
+		*configFile = ""
+		if _, err := os.Stat("config.yaml"); err == nil {
+			*configFile = "config.yaml"
+		} else if _, err := os.Stat("config.yml"); err == nil {
+			*configFile = "config.yml"
+		} else {
+			fmt.Printf("运行目录中未找到 config.yaml 或 config.yml\n")
+			os.Exit(1)
+		}
+	}
 
 	// 先创建一个临时 logger 用于启动阶段（配置还没加载）
 	tmpLogger := middleware.NewLogger("info", "text")
@@ -157,7 +178,7 @@ func main() {
 
 	// 5. 初始化 DNS Cache（RR 级别缓存）
 	var dnsCache cache.DNSCache
-	maxTTL := time.Duration(cfg.Cache.DNSCache.MaxTTL) * time.Second
+	maxTTL := 24 * time.Hour // 固定最大 TTL 为 24 小时
 
 	if cfg.Cache.DNSCache.Type == "redis" && redisClient != nil {
 		dnsCache = cache.NewRedisDNSCache(redisClient, maxTTL)
@@ -188,9 +209,6 @@ func main() {
 	}
 	logger.Info("Query Router 初始化成功")
 
-	// 7. 初始化 Singleflight
-	singleflight := middleware.NewSingleflight()
-
 	// 阶段 5: 启动服务
 	logger.Info("=== 阶段 5: 启动服务 ===")
 
@@ -213,7 +231,7 @@ func main() {
 	}
 
 	// 启动 DNS Server
-	dnsServer := server.NewServer(cfg.Server.Port, cfg.Server.Bind, queryRouter, logger, singleflight)
+	dnsServer := server.NewServer(cfg.Server.Port, cfg.Server.Bind, queryRouter, logger)
 
 	go func() {
 		if err := dnsServer.Start(ctx); err != nil {

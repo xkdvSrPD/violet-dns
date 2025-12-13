@@ -96,7 +96,7 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 	r.logger.LogPolicyMatch(ctx, domain, policy.Name, policy.Group)
 
 	// 记录策略选项
-	if len(policy.Options.ExpectedIPs) > 0 || policy.Options.FallbackGroup != "" || policy.Options.DisableCache || policy.Options.RewriteTTL > 0 {
+	if len(policy.Options.ExpectedIPs) > 0 || policy.Options.FallbackGroup != "" || policy.Options.DisableCache {
 		options := make(map[string]interface{})
 		if len(policy.Options.ExpectedIPs) > 0 {
 			options["expected_ips"] = policy.Options.ExpectedIPs
@@ -106,9 +106,6 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 		}
 		if policy.Options.DisableCache {
 			options["disable_cache"] = true
-		}
-		if policy.Options.RewriteTTL > 0 {
-			options["rewrite_ttl"] = policy.Options.RewriteTTL
 		}
 		r.logger.LogPolicyOptions(ctx, domain, options)
 	}
@@ -149,7 +146,7 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 
 	// 10. 缓存结果（按 RR 记录分别缓存）
 	if !policy.Options.DisableCache {
-		r.cacheResponse(ctx, domain, finalResp, uint32(policy.Options.RewriteTTL))
+		r.cacheResponse(ctx, domain, finalResp, 0)
 	}
 
 	latency := time.Since(startTime)
@@ -391,7 +388,7 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 				if err == nil {
 					// 缓存结果
 					if !policy.Options.DisableCache {
-						r.cacheResponse(ctx, domain, directResp, uint32(policy.Options.RewriteTTL))
+						r.cacheResponse(ctx, domain, directResp, 0)
 					}
 
 					// 异步写入域名分类缓存
@@ -410,7 +407,7 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 	if proxyResp != nil {
 		// 缓存结果
 		if !policy.Options.DisableCache {
-			r.cacheResponse(ctx, domain, proxyResp, uint32(policy.Options.RewriteTTL))
+			r.cacheResponse(ctx, domain, proxyResp, 0)
 		}
 
 		go r.asyncCacheCategory(domain, "proxy_site")
@@ -424,7 +421,7 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 	if proxyECSResp != nil {
 		// 缓存结果
 		if !policy.Options.DisableCache {
-			r.cacheResponse(ctx, domain, proxyECSResp, uint32(policy.Options.RewriteTTL))
+			r.cacheResponse(ctx, domain, proxyECSResp, 0)
 		}
 
 		go r.asyncCacheCategory(domain, "proxy_site")

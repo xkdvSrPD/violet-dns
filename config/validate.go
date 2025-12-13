@@ -92,15 +92,6 @@ func validateUpstreamGroup(groups map[string]*UpstreamGroupConfig) error {
 		if len(group.Nameservers) == 0 {
 			return fmt.Errorf("组 %s 至少需要一个 nameserver", name)
 		}
-
-		// 验证 strategy
-		validStrategies := map[string]bool{
-			"ipv4_only": true, "ipv6_only": true,
-			"prefer_ipv4": true, "prefer_ipv6": true,
-		}
-		if group.Strategy != "" && !validStrategies[group.Strategy] {
-			return fmt.Errorf("组 %s 的 strategy 值无效: %s", name, group.Strategy)
-		}
 	}
 	return nil
 }
@@ -168,11 +159,6 @@ func validateCache(cache *CacheConfig, redis *RedisConfig) error {
 		validTypes := map[string]bool{"redis": true, "memory": true}
 		if !validTypes[cache.DNSCache.Type] {
 			return fmt.Errorf("dns_cache.type 必须是 redis 或 memory")
-		}
-
-		validAlgorithms := map[string]bool{"arc": true, "lru": true}
-		if !validAlgorithms[cache.DNSCache.Algorithm] {
-			return fmt.Errorf("dns_cache.algorithm 必须是 arc 或 lru")
 		}
 
 		if cache.DNSCache.Type == "redis" && redis.Server == "" {
