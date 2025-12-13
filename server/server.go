@@ -14,13 +14,13 @@ import (
 type Server struct {
 	port         int
 	bind         string
-	router       *router.Router
+	router       router.QueryRouter // 使用接口而非具体类型
 	logger       *middleware.Logger
 	singleflight *middleware.Singleflight
 }
 
 // NewServer 创建新的 DNS 服务器
-func NewServer(port int, bind string, r *router.Router, logger *middleware.Logger, sf *middleware.Singleflight) *Server {
+func NewServer(port int, bind string, r router.QueryRouter, logger *middleware.Logger, sf *middleware.Singleflight) *Server {
 	return &Server{
 		port:         port,
 		bind:         bind,
