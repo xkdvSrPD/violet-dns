@@ -114,7 +114,11 @@ func main() {
 	// 阶段 4: 组件初始化
 	fmt.Println("\n=== 阶段 4: 组件初始化 ===")
 
-	// 1. 初始化 GeoIP Matcher
+	// 1. 初始化 Logger（需要最先初始化，其他组件会用到）
+	logger := middleware.NewLogger(cfg.Log.Level, cfg.Log.Format)
+	fmt.Println("Logger 初始化成功")
+
+	// 2. 初始化 GeoIP Matcher
 	geoipMatcher, err := geoip.NewMatcher("geoip.dat", "GeoLite2-ASN.mmdb")
 	if err != nil {
 		fmt.Printf("警告: 初始化 GeoIP Matcher 失败: %v\n", err)
@@ -122,7 +126,7 @@ func main() {
 		fmt.Println("GeoIP Matcher 初始化成功")
 	}
 
-	// 2. 初始化 Outbound
+	// 3. 初始化 Outbound
 	outbounds := make(map[string]outbound.Outbound)
 	outbounds["direct"] = outbound.NewDirectOutbound()
 	for _, obCfg := range cfg.Outbound {
@@ -137,15 +141,15 @@ func main() {
 		}
 	}
 
-	// 3. 初始化 Upstream Manager
-	upstreamMgr := upstream.NewManager()
+	// 4. 初始化 Upstream Manager
+	upstreamMgr := upstream.NewManager(logger)
 	if err := upstreamMgr.LoadFromConfig(cfg, outbounds); err != nil {
 		fmt.Printf("错误: 初始化 Upstream Manager 失败: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("Upstream Manager 初始化成功")
 
-	// 4. 初始化 DNS Cache
+	// 5. 初始化 DNS Cache
 	var dnsCache cache.DNSCache
 	maxTTL := time.Duration(cfg.Cache.DNSCache.MaxTTL) * time.Second
 	staleTTL := time.Duration(cfg.Cache.DNSCache.StaleTTL) * time.Second
@@ -160,10 +164,6 @@ func main() {
 		dnsCache = cache.NewMemoryDNSCache(maxTTL, cfg.Cache.DNSCache.ServeStale, staleTTL)
 	}
 	fmt.Println("DNS Cache 初始化成功")
-
-	// 5. 初始化 Logger
-	logger := middleware.NewLogger(cfg.Log.Level, cfg.Log.Format)
-	fmt.Println("Logger 初始化成功")
 
 	// 6. 初始化 Router
 	queryRouter := router.NewRouter(upstreamMgr, geoipMatcher, dnsCache, categoryCache, logger)

@@ -6,18 +6,21 @@ import (
 
 	"github.com/miekg/dns"
 	"violet-dns/config"
+	"violet-dns/middleware"
 	"violet-dns/outbound"
 )
 
 // Manager 上游管理器
 type Manager struct {
 	groups map[string]*Group
+	logger *middleware.Logger
 }
 
 // NewManager 创建上游管理器
-func NewManager() *Manager {
+func NewManager(logger *middleware.Logger) *Manager {
 	return &Manager{
 		groups: make(map[string]*Group),
+		logger: logger,
 	}
 }
 
@@ -38,6 +41,9 @@ func (m *Manager) Query(ctx context.Context, groupName, domain string, qtype uin
 	if !exists {
 		return nil, fmt.Errorf("上游组不存在: %s", groupName)
 	}
+
+	// DEBUG: 记录开始上游查询
+	m.logger.LogUpstreamQuery(domain, qtype, groupName, group.nameservers)
 
 	return group.Query(ctx, domain, qtype)
 }
@@ -60,6 +66,7 @@ func (m *Manager) LoadFromConfig(cfg *config.Config, outbounds map[string]outbou
 			ob,
 			groupCfg.Strategy,
 			groupCfg.Timeout,
+			m.logger,
 		)
 
 		// 设置 ECS
