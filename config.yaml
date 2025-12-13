@@ -107,7 +107,7 @@ redis:
 # Domain Categorization Policy
 category_policy:
   preload:
-    enable: false
+    enable: true
     file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
     domain_group:
       proxy_site:
@@ -189,7 +189,7 @@ performance:
 
 # Logging Configuration
 log:
-  level: debug  # debug, info, warn, error
+  level: info  # debug, info, warn, error
   format: json  # or: text
   output: stdout  # or: file path
 
