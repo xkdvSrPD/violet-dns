@@ -9,21 +9,53 @@ import (
 
 // MemoryDNSCache 内存 DNS 缓存
 type MemoryDNSCache struct {
-	data       map[string]*CacheEntry
-	mu         sync.RWMutex
-	maxTTL     time.Duration
-	serveStale bool
-	staleTTL   time.Duration
+	data          map[string]*CacheEntry
+	mu            sync.RWMutex
+	maxTTL        time.Duration
+	cleanupTicker *time.Ticker
+	stopCleanup   chan struct{}
 }
 
 // NewMemoryDNSCache 创建新的内存 DNS 缓存
-func NewMemoryDNSCache(maxTTL time.Duration, serveStale bool, staleTTL time.Duration) *MemoryDNSCache {
-	return &MemoryDNSCache{
-		data:       make(map[string]*CacheEntry),
-		maxTTL:     maxTTL,
-		serveStale: serveStale,
-		staleTTL:   staleTTL,
+func NewMemoryDNSCache(maxTTL time.Duration) *MemoryDNSCache {
+	c := &MemoryDNSCache{
+		data:          make(map[string]*CacheEntry),
+		maxTTL:        maxTTL,
+		cleanupTicker: time.NewTicker(1 * time.Minute), // 每分钟清理一次
+		stopCleanup:   make(chan struct{}),
 	}
+
+	// 启动后台清理 goroutine
+	go c.cleanupExpired()
+
+	return c
+}
+
+// cleanupExpired 定期清理过期条目
+func (c *MemoryDNSCache) cleanupExpired() {
+	for {
+		select {
+		case <-c.cleanupTicker.C:
+			c.mu.Lock()
+			now := time.Now()
+			for key, entry := range c.data {
+				// 过期则删除
+				if now.After(entry.ExpireTime) {
+					delete(c.data, key)
+				}
+			}
+			c.mu.Unlock()
+		case <-c.stopCleanup:
+			c.cleanupTicker.Stop()
+			return
+		}
+	}
+}
+
+// Close 关闭缓存，停止清理 goroutine
+func (c *MemoryDNSCache) Close() error {
+	close(c.stopCleanup)
+	return nil
 }
 
 // Get 获取缓存
@@ -36,20 +68,12 @@ func (c *MemoryDNSCache) Get(key string) (*dns.Msg, bool) {
 		return nil, false
 	}
 
-	now := time.Now()
-
-	// 未过期，直接返回
-	if now.Before(entry.ExpireTime) {
-		return entry.Response.Copy(), true
+	// 严格检查 TTL
+	if time.Now().After(entry.ExpireTime) {
+		return nil, false
 	}
 
-	// 过期但 stale 可用
-	if c.serveStale && now.Before(entry.StaleUntil) {
-		return entry.Response.Copy(), true
-	}
-
-	// 完全过期
-	return nil, false
+	return entry.Response.Copy(), true
 }
 
 // Set 设置缓存
@@ -62,11 +86,9 @@ func (c *MemoryDNSCache) Set(key string, msg *dns.Msg, ttl time.Duration) error 
 		ttl = c.maxTTL
 	}
 
-	now := time.Now()
 	entry := &CacheEntry{
 		Response:   msg.Copy(),
-		ExpireTime: now.Add(ttl),
-		StaleUntil: now.Add(ttl + c.staleTTL),
+		ExpireTime: time.Now().Add(ttl),
 	}
 
 	c.data[key] = entry
@@ -89,4 +111,11 @@ func (c *MemoryDNSCache) Clear() error {
 
 	c.data = make(map[string]*CacheEntry)
 	return nil
+}
+
+// Size 返回缓存条目数量
+func (c *MemoryDNSCache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.data)
 }

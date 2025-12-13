@@ -12,19 +12,15 @@ import (
 
 // RedisDNSCache Redis DNS 缓存
 type RedisDNSCache struct {
-	client     *redis.Client
-	maxTTL     time.Duration
-	serveStale bool
-	staleTTL   time.Duration
+	client *redis.Client
+	maxTTL time.Duration
 }
 
 // NewRedisDNSCache 创建新的 Redis DNS 缓存
-func NewRedisDNSCache(client *redis.Client, maxTTL time.Duration, serveStale bool, staleTTL time.Duration) *RedisDNSCache {
+func NewRedisDNSCache(client *redis.Client, maxTTL time.Duration) *RedisDNSCache {
 	return &RedisDNSCache{
-		client:     client,
-		maxTTL:     maxTTL,
-		serveStale: serveStale,
-		staleTTL:   staleTTL,
+		client: client,
+		maxTTL: maxTTL,
 	}
 }
 
@@ -42,19 +38,14 @@ func (c *RedisDNSCache) Get(key string) (*dns.Msg, bool) {
 		return nil, false
 	}
 
-	now := time.Now()
-
-	// 未过期
-	if now.Before(entry.ExpireTime) {
-		return entry.Response, true
+	// 严格检查 TTL
+	if time.Now().After(entry.ExpireTime) {
+		// 已过期，删除
+		c.client.Del(ctx, "dns:"+key)
+		return nil, false
 	}
 
-	// Stale 可用
-	if c.serveStale && now.Before(entry.StaleUntil) {
-		return entry.Response, true
-	}
-
-	return nil, false
+	return entry.Response, true
 }
 
 // Set 设置缓存
@@ -66,11 +57,9 @@ func (c *RedisDNSCache) Set(key string, msg *dns.Msg, ttl time.Duration) error {
 		ttl = c.maxTTL
 	}
 
-	now := time.Now()
 	entry := &CacheEntry{
 		Response:   msg,
-		ExpireTime: now.Add(ttl),
-		StaleUntil: now.Add(ttl + c.staleTTL),
+		ExpireTime: time.Now().Add(ttl),
 	}
 
 	data, err := json.Marshal(entry)
@@ -78,9 +67,8 @@ func (c *RedisDNSCache) Set(key string, msg *dns.Msg, ttl time.Duration) error {
 		return fmt.Errorf("序列化缓存失败: %w", err)
 	}
 
-	// 设置过期时间为 TTL + StaleTTL
-	expiration := ttl + c.staleTTL
-	if err := c.client.Set(ctx, "dns:"+key, data, expiration).Err(); err != nil {
+	// 设置 Redis 过期时间，严格遵守 TTL
+	if err := c.client.Set(ctx, "dns:"+key, data, ttl).Err(); err != nil {
 		return fmt.Errorf("写入 Redis 失败: %w", err)
 	}
 

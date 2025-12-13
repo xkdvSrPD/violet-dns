@@ -257,15 +257,35 @@ func (l *Logger) LogDNSAnswer(ctx context.Context, domain string, answers []dns.
 	if len(answers) == 0 {
 		return
 	}
+
+	// 提取 IP 地址
+	ips := make([]string, 0)
 	answerStrs := make([]string, 0, len(answers))
+
 	for _, ans := range answers {
 		answerStrs = append(answerStrs, ans.String())
+
+		// 提取 A 和 AAAA 记录的 IP
+		switch rr := ans.(type) {
+		case *dns.A:
+			ips = append(ips, rr.A.String())
+		case *dns.AAAA:
+			ips = append(ips, rr.AAAA.String())
+		}
 	}
-	l.withTraceID(ctx).WithFields(logrus.Fields{
+
+	fields := logrus.Fields{
 		"event":   "dns_answer",
 		"domain":  domain,
 		"answers": answerStrs,
-	}).Debug("DNS应答")
+	}
+
+	// 如果有 IP 地址，单独列出
+	if len(ips) > 0 {
+		fields["ips"] = ips
+	}
+
+	l.withTraceID(ctx).WithFields(fields).Debug("DNS应答")
 }
 
 // LogIPValidation 记录 IP 验证

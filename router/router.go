@@ -22,6 +22,8 @@ type Router struct {
 	dnsCache      cache.DNSCache
 	categoryCache cache.CategoryCache
 	logger        *middleware.Logger
+	fallbackRules []string      // Fallback 规则
+	fallbackTTL   time.Duration // 域名分类缓存 TTL
 }
 
 // NewRouter 创建新的路由器
@@ -31,6 +33,8 @@ func NewRouter(
 	dnsCache cache.DNSCache,
 	categoryCache cache.CategoryCache,
 	logger *middleware.Logger,
+	fallbackRules []string,
+	fallbackTTL time.Duration,
 ) *Router {
 	return &Router{
 		matcher:       NewMatcher(),
@@ -40,6 +44,8 @@ func NewRouter(
 		dnsCache:      dnsCache,
 		categoryCache: categoryCache,
 		logger:        logger,
+		fallbackRules: fallbackRules,
+		fallbackTTL:   fallbackTTL,
 	}
 }
 
@@ -318,19 +324,29 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 			"ips": ipStrs,
 		})
 
+		// 使用配置的 fallback 规则进行匹配
 		for _, ip := range ips {
-			// 简化：假设规则是 geoip:cn
-			if r.geoipMatcher.Match(ip, "geoip:cn") {
-				r.logger.LogFallback(ctx, domain, "proxy_ecs", "direct", "检测到中国IP")
-				r.logger.LogProxyECSFallback(ctx, domain, "IP匹配中国规则，回退到direct", map[string]interface{}{
-					"ip": ip,
+			// 检查 IP 是否匹配任一规则
+			if r.geoipMatcher.MatchAny(ip, r.fallbackRules) {
+				r.logger.LogFallback(ctx, domain, "proxy_ecs", "direct", "IP匹配fallback规则")
+				r.logger.LogProxyECSFallback(ctx, domain, "IP匹配规则，回退到direct", map[string]interface{}{
+					"ip":    ip.String(),
+					"rules": r.fallbackRules,
 				})
-				return r.upstreamMgr.Query(ctx, "direct", domain, qtype)
+
+				// 使用 direct 查询
+				directResp, err := r.upstreamMgr.Query(ctx, "direct", domain, qtype)
+				if err == nil {
+					// 异步写入域名分类缓存 (分类为 direct_site)
+					go r.asyncCacheCategory(domain, "direct_site")
+				}
+				return directResp, err
 			}
 		}
 
-		r.logger.LogProxyECSFallback(ctx, domain, "IP未匹配中国规则", map[string]interface{}{
-			"ips": ipStrs,
+		r.logger.LogProxyECSFallback(ctx, domain, "IP未匹配fallback规则", map[string]interface{}{
+			"ips":   ipStrs,
+			"rules": r.fallbackRules,
 		})
 	}
 
@@ -339,6 +355,8 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 		r.logger.LogProxyECSFallback(ctx, domain, "使用proxy结果", map[string]interface{}{
 			"answer_count": len(proxyResp.Answer),
 		})
+		// 异步写入域名分类缓存 (分类为 proxy_site)
+		go r.asyncCacheCategory(domain, "proxy_site")
 		return proxyResp, nil
 	}
 
@@ -347,11 +365,26 @@ func (r *Router) handleProxyECSFallback(ctx context.Context, domain string, qtyp
 		r.logger.LogProxyECSFallback(ctx, domain, "使用proxy_ecs结果（proxy失败）", map[string]interface{}{
 			"answer_count": len(proxyECSResp.Answer),
 		})
+		// 异步写入域名分类缓存 (分类为 proxy_site，因为无法确定)
+		go r.asyncCacheCategory(domain, "proxy_site")
 		return proxyECSResp, nil
 	}
 
 	r.logger.LogError(ctx, "ProxyECSFallback全部失败", domain, fmt.Errorf("所有查询失败"), map[string]interface{}{})
 	return nil, fmt.Errorf("所有查询失败")
+}
+
+// asyncCacheCategory 异步写入域名分类缓存
+func (r *Router) asyncCacheCategory(domain, category string) {
+	// 不阻塞主流程，异步写入
+	if r.categoryCache != nil {
+		err := r.categoryCache.Set(domain, category)
+		if err != nil {
+			r.logger.Debug("写入域名分类缓存失败: domain=%s category=%s error=%v", domain, category, err)
+		} else {
+			r.logger.Debug("写入域名分类缓存成功: domain=%s category=%s", domain, category)
+		}
+	}
 }
 
 // validateIPs 验证 IP 是否符合预期

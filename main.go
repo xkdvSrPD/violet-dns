@@ -157,21 +157,29 @@ func main() {
 	// 5. 初始化 DNS Cache
 	var dnsCache cache.DNSCache
 	maxTTL := time.Duration(cfg.Cache.DNSCache.MaxTTL) * time.Second
-	staleTTL := time.Duration(cfg.Cache.DNSCache.StaleTTL) * time.Second
 
 	if cfg.Cache.DNSCache.Type == "redis" && redisClient != nil {
-		dnsCache = cache.NewRedisDNSCache(redisClient, maxTTL, cfg.Cache.DNSCache.ServeStale, staleTTL)
+		dnsCache = cache.NewRedisDNSCache(redisClient, maxTTL)
 		if cfg.Cache.DNSCache.Clear {
 			dnsCache.Clear()
 			logger.Info("已清空 DNS 缓存")
 		}
 	} else {
-		dnsCache = cache.NewMemoryDNSCache(maxTTL, cfg.Cache.DNSCache.ServeStale, staleTTL)
+		dnsCache = cache.NewMemoryDNSCache(maxTTL)
 	}
 	logger.Info("DNS Cache 初始化成功")
 
 	// 6. 初始化 Router
-	queryRouter := router.NewRouter(upstreamMgr, geoipMatcher, dnsCache, categoryCache, logger)
+	categoryTTL := time.Duration(cfg.Cache.CategoryCache.TTL) * time.Second
+	queryRouter := router.NewRouter(
+		upstreamMgr,
+		geoipMatcher,
+		dnsCache,
+		categoryCache,
+		logger,
+		cfg.Fallback.Rule, // fallback 规则
+		categoryTTL,       // 域名分类缓存 TTL
+	)
 
 	// 加载域名分组
 	parser := category.NewParser()

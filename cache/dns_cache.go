@@ -19,18 +19,11 @@ type DNSCache interface {
 type CacheEntry struct {
 	Response   *dns.Msg
 	ExpireTime time.Time
-	StaleUntil time.Time
 }
 
 // IsExpired 检查是否过期
 func (e *CacheEntry) IsExpired() bool {
 	return time.Now().After(e.ExpireTime)
-}
-
-// IsStale 检查是否过期但仍可用（stale）
-func (e *CacheEntry) IsStale() bool {
-	now := time.Now()
-	return now.After(e.ExpireTime) && now.Before(e.StaleUntil)
 }
 
 // GenerateCacheKey 生成缓存键
