@@ -29,6 +29,14 @@ upstream_group:
       - https://v.xns.one/nK92WKAW_0A/dns-query
     outbound: hk
 
+  # Foreign DNS through proxy with ECS (for CDN optimization)
+  proxy_us:
+    nameservers:
+      - https://n.xns.one/nK92WKAW_0A/dns-query
+      - https://v.xns.one/nK92WKAW_0A/dns-query
+    outbound: us
+
+
   # Domestic DNS (direct connection)
   direct:
     nameservers:
@@ -70,12 +78,12 @@ ecs:
 cache:
   dns_cache:
     enable: true
-    clear: true  # IMPORTANT: Don't clear in production
+    clear: false  # IMPORTANT: Don't clear in production
     type: redis  # or: memory
 
   category_cache:
     enable: true
-    clear: true
+    clear: false
     type: redis
     ttl: 604800  # 7 days (categories rarely change)
 
@@ -104,22 +112,28 @@ category_policy:
         - category-games
       ads_site:
         - category-ads-all
+      ai_site:
+        - category-ai-chat-!cn
 
 # Query Routing Policy (matched top-down)
 query_policy:
-  # Game domains (low latency needed)
-  - name: game_domain
-    group: direct
-    options:
-      strategy: prefer_ipv4
-      disable_cache: true  # Always get fresh IPs
-
   # Block ads and trackers
   - name: ads_site
     group: block
     options:
       block_type: nxdomain  # or: noerror, 0.0.0.0
       block_ttl: 60  # Block record TTL in seconds
+
+  # Game domains (low latency needed)
+  - name: game_domain
+    group: direct
+    options:
+      strategy: prefer_ipv4
+
+  - name: ai_site
+    group: proxy_us
+    options:
+      strategy: prefer_ipv4
 
   # Foreign sites through proxy
   - name: proxy_site
@@ -136,7 +150,6 @@ query_policy:
     group: direct
     options:
       strategy: prefer_ipv4
-      ecs: 113.132.219.0/24  # Per-policy ECS override
       expected_ips:
         - geoip:cn
 
@@ -167,7 +180,7 @@ performance:
 
 # Logging Configuration
 log:
-  level: info  # debug, info, warn, error
+  level: debug  # debug, info, warn, error
   format: json  # or: text
   output: stdout  # or: file path
 
