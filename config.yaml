@@ -12,7 +12,6 @@ bootstrap:
   nameservers:
     - 223.5.5.5
     - 119.29.29.29
-  timeout: 5s
 
 # Upstream DNS Groups
 upstream_group:
@@ -24,7 +23,6 @@ upstream_group:
     outbound: hk
     strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
     concurrent_queries: true  # Query A and AAAA in parallel
-    timeout: 5s
 
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:
@@ -34,8 +32,6 @@ upstream_group:
     outbound: hk
     strategy: prefer_ipv4
     concurrent_queries: true
-    ecs_ip: 113.132.219.0/24  # Per-group ECS, overrides global default
-    timeout: 5s
 
   # Domestic DNS (direct connection)
   direct:
@@ -43,7 +39,6 @@ upstream_group:
       - 10.115.15.1  # Use system resolver
     strategy: prefer_ipv4
     concurrent_queries: true
-    timeout: 3s
 
 # Outbound (SOCKS5 Proxies)
 outbound:
@@ -102,7 +97,6 @@ redis:
   password: "violet-dns-secure-2024"
   max_retries: 3
   pool_size: 10
-  timeout: 5s
 
 # Domain Categorization Policy
 category_policy:
@@ -135,13 +129,13 @@ query_policy:
     group: block
     options:
       block_type: nxdomain  # or: noerror, 0.0.0.0
+      ttl: 60
 
   # Foreign sites through proxy
   - name: proxy_site
     group: proxy
     options:
       protocol: auto  # Prefer DoH, fallback to UDP
-      disable_ipv6: false
       rewrite_ttl: 3600  # Override TTL to 1 hour
       expected_ips:  # Only accept non-CN IPs
         - geoip:!cn
@@ -161,7 +155,6 @@ query_policy:
   - name: unknown
     group: proxy_ecs_fallback
     options:
-      fallback_timeout: 3s  # Wait max 3s for proxy_ecs
       auto_categorize: true  # Update category_cache based on result
 
 # Fallback Configuration (for proxy_ecs_fallback policy)
@@ -170,7 +163,6 @@ fallback:
   asn: 'https://github.com/Loyalsoldier/geoip/releases/latest/download/GeoLite2-ASN.mmdb'
   update: '0 0 3 * * *'  # Update at 3 AM daily
   strategy: race  # Race both proxy_ecs and proxy
-  timeout: 3s  # Max wait for proxy_ecs before using proxy result
   rule:
     - geoip:cn
     - geoip:private
@@ -182,7 +174,6 @@ fallback:
 # Performance Configuration
 performance:
   singleflight: true  # Deduplicate concurrent identical queries
-  query_timeout: 10s  # Overall query timeout
   max_concurrent_queries: 1000  # Prevent query storm
   prefetch: true  # Refresh cache before TTL expires (optional)
   prefetch_threshold: 0.1  # Refresh when 10% TTL remaining

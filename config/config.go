@@ -1,9 +1,5 @@
 package config
 
-import (
-	"time"
-)
-
 // Config 主配置结构
 type Config struct {
 	Server         ServerConfig                    `yaml:"server"`
@@ -30,18 +26,16 @@ type ServerConfig struct {
 
 // BootstrapConfig Bootstrap DNS 配置
 type BootstrapConfig struct {
-	Nameservers []string      `yaml:"nameservers"`
-	Timeout     time.Duration `yaml:"timeout"`
+	Nameservers []string `yaml:"nameservers"`
 }
 
 // UpstreamGroupConfig 上游 DNS 组配置
 type UpstreamGroupConfig struct {
-	Nameservers       []string      `yaml:"nameservers"`
-	Outbound          string        `yaml:"outbound"`
-	Strategy          string        `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
-	ConcurrentQueries bool          `yaml:"concurrent_queries"`
-	ECSIP             string        `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
-	Timeout           time.Duration `yaml:"timeout"`
+	Nameservers       []string `yaml:"nameservers"`
+	Outbound          string   `yaml:"outbound"`
+	Strategy          string   `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
+	ConcurrentQueries bool     `yaml:"concurrent_queries"`
+	ECSIP             string   `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
 }
 
 // OutboundConfig 出站配置
@@ -93,13 +87,12 @@ type CategoryCacheConfig struct {
 
 // RedisConfig Redis 配置
 type RedisConfig struct {
-	Server     string        `yaml:"server"`
-	Port       int           `yaml:"port"`
-	Database   int           `yaml:"database"`
-	Password   string        `yaml:"password"`
-	MaxRetries int           `yaml:"max_retries"`
-	PoolSize   int           `yaml:"pool_size"`
-	Timeout    time.Duration `yaml:"timeout"`
+	Server     string `yaml:"server"`
+	Port       int    `yaml:"port"`
+	Database   int    `yaml:"database"`
+	Password   string `yaml:"password"`
+	MaxRetries int    `yaml:"max_retries"`
+	PoolSize   int    `yaml:"pool_size"`
 }
 
 // CategoryPolicyConfig 分类策略配置
@@ -124,35 +117,32 @@ type QueryPolicyConfig struct {
 
 // QueryPolicyOptions 查询策略选项
 type QueryPolicyOptions struct {
-	Protocol        string        `yaml:"protocol"` // auto, udp, https
-	DisableCache    bool          `yaml:"disable_cache"`
-	DisableIPv6     bool          `yaml:"disable_ipv6"`
-	RewriteTTL      int           `yaml:"rewrite_ttl"`
-	ECS             string        `yaml:"ecs"`
-	ExpectedIPs     []string      `yaml:"expected_ips"`
-	FallbackGroup   string        `yaml:"fallback_group"`
-	BlockType       string        `yaml:"block_type"` // nxdomain, noerror, 0.0.0.0
-	FallbackTimeout time.Duration `yaml:"fallback_timeout"`
-	AutoCategorize  bool          `yaml:"auto_categorize"`
+	Protocol       string   `yaml:"protocol"` // auto, udp, https
+	DisableCache   bool     `yaml:"disable_cache"`
+	DisableIPv6    bool     `yaml:"disable_ipv6"`
+	RewriteTTL     int      `yaml:"rewrite_ttl"`
+	ECS            string   `yaml:"ecs"`
+	ExpectedIPs    []string `yaml:"expected_ips"`
+	FallbackGroup  string   `yaml:"fallback_group"`
+	BlockType      string   `yaml:"block_type"` // nxdomain, noerror, 0.0.0.0
+	AutoCategorize bool     `yaml:"auto_categorize"`
 }
 
 // FallbackConfig 回退配置
 type FallbackConfig struct {
-	GeoIP    string        `yaml:"geoip"`
-	ASN      string        `yaml:"asn"`
-	Update   string        `yaml:"update"`   // cron 表达式
-	Strategy string        `yaml:"strategy"` // race
-	Timeout  time.Duration `yaml:"timeout"`
-	Rule     []string      `yaml:"rule"`
+	GeoIP    string   `yaml:"geoip"`
+	ASN      string   `yaml:"asn"`
+	Update   string   `yaml:"update"`   // cron 表达式
+	Strategy string   `yaml:"strategy"` // race
+	Rule     []string `yaml:"rule"`
 }
 
 // PerformanceConfig 性能配置
 type PerformanceConfig struct {
-	Singleflight         bool          `yaml:"singleflight"`
-	QueryTimeout         time.Duration `yaml:"query_timeout"`
-	MaxConcurrentQueries int           `yaml:"max_concurrent_queries"`
-	Prefetch             bool          `yaml:"prefetch"`
-	PrefetchThreshold    float64       `yaml:"prefetch_threshold"`
+	Singleflight         bool    `yaml:"singleflight"`
+	MaxConcurrentQueries int     `yaml:"max_concurrent_queries"`
+	Prefetch             bool    `yaml:"prefetch"`
+	PrefetchThreshold    float64 `yaml:"prefetch_threshold"`
 }
 
 // LogConfig 日志配置

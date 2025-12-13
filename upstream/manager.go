@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/miekg/dns"
 	"violet-dns/config"
@@ -50,6 +51,8 @@ func (m *Manager) Query(ctx context.Context, groupName, domain string, qtype uin
 
 // LoadFromConfig 从配置加载上游组
 func (m *Manager) LoadFromConfig(cfg *config.Config, outbounds map[string]outbound.Outbound) error {
+	const defaultTimeout = 5 * time.Second // 固定超时时间为 5 秒
+
 	for name, groupCfg := range cfg.UpstreamGroup {
 		// 获取 outbound
 		ob := outbounds["direct"] // 默认使用 direct
@@ -65,7 +68,7 @@ func (m *Manager) LoadFromConfig(cfg *config.Config, outbounds map[string]outbou
 			groupCfg.Nameservers,
 			ob,
 			groupCfg.Strategy,
-			groupCfg.Timeout,
+			defaultTimeout,
 			m.logger,
 		)
 

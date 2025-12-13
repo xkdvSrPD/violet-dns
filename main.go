@@ -69,16 +69,17 @@ func main() {
 	// 创建 Redis 客户端
 	var redisClient *redis.Client
 	if cfg.Cache.DNSCache.Type == "redis" || cfg.Cache.CategoryCache.Type == "redis" {
+		const redisTimeout = 5 * time.Second // 固定 Redis 超时为 5 秒
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:         fmt.Sprintf("%s:%d", cfg.Redis.Server, cfg.Redis.Port),
 			Password:     cfg.Redis.Password,
 			DB:           cfg.Redis.Database,
 			MaxRetries:   cfg.Redis.MaxRetries,
 			PoolSize:     cfg.Redis.PoolSize,
-			DialTimeout:  cfg.Redis.Timeout,
-			ReadTimeout:  cfg.Redis.Timeout * 2, // 读取超时设为配置的 2 倍
-			WriteTimeout: cfg.Redis.Timeout * 2, // 写入超时设为配置的 2 倍
-			PoolTimeout:  cfg.Redis.Timeout * 3, // 连接池超时设为配置的 3 倍
+			DialTimeout:  redisTimeout,
+			ReadTimeout:  redisTimeout * 2, // 读取超时设为 10 秒
+			WriteTimeout: redisTimeout * 2, // 写入超时设为 10 秒
+			PoolTimeout:  redisTimeout * 3, // 连接池超时设为 15 秒
 		})
 
 		// 测试连接

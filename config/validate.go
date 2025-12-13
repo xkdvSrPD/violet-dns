@@ -276,9 +276,6 @@ func validatePerformance(cfg *PerformanceConfig) error {
 	if cfg.MaxConcurrentQueries <= 0 {
 		return fmt.Errorf("max_concurrent_queries 必须大于 0")
 	}
-	if cfg.QueryTimeout <= 0 {
-		return fmt.Errorf("query_timeout 必须大于 0")
-	}
 	return nil
 }
 
