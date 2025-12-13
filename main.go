@@ -154,24 +154,24 @@ func main() {
 	}
 	logger.Info("Upstream Manager 初始化成功")
 
-	// 5. 初始化 DNS Cache V2（RR 级别缓存）
-	var dnsCache cache.DNSCacheV2
+	// 5. 初始化 DNS Cache（RR 级别缓存）
+	var dnsCache cache.DNSCache
 	maxTTL := time.Duration(cfg.Cache.DNSCache.MaxTTL) * time.Second
 
 	if cfg.Cache.DNSCache.Type == "redis" && redisClient != nil {
-		dnsCache = cache.NewRedisDNSCacheV2(redisClient, maxTTL)
+		dnsCache = cache.NewRedisDNSCache(redisClient, maxTTL)
 		if cfg.Cache.DNSCache.Clear {
 			dnsCache.Clear()
 			logger.Info("已清空 DNS 缓存")
 		}
-		logger.Info("DNS Cache V2 (Redis) 初始化成功")
+		logger.Info("DNS Cache (Redis) 初始化成功")
 	} else {
-		dnsCache = cache.NewMemoryDNSCacheV2(maxTTL)
-		logger.Info("DNS Cache V2 (Memory) 初始化成功")
+		dnsCache = cache.NewMemoryDNSCache(maxTTL)
+		logger.Info("DNS Cache (Memory) 初始化成功")
 	}
 
-	// 6. 初始化 RouterV2（支持 CNAME 链部分缓存）
-	queryRouter := router.NewRouterV2(
+	// 6. 初始化 Router（支持 CNAME 链部分缓存）
+	queryRouter := router.NewRouter(
 		upstreamMgr,
 		geoipMatcher,
 		dnsCache,

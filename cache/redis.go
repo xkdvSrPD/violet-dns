@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisDNSCache Redis DNS 缓存
+// RedisDNSCache Redis DNS 缓存（RR 级别）
 type RedisDNSCache struct {
 	client *redis.Client
 	maxTTL time.Duration
@@ -24,84 +24,133 @@ func NewRedisDNSCache(client *redis.Client, maxTTL time.Duration) *RedisDNSCache
 	}
 }
 
-// Get 获取缓存
-func (c *RedisDNSCache) Get(key string) (*dns.Msg, bool) {
+// GetRRs 获取 RR 记录
+func (c *RedisDNSCache) GetRRs(qname string, qtype uint16) ([]*RRCacheItem, bool) {
 	ctx := context.Background()
+	key := "dns:" + CacheKey{
+		Name:  dns.Fqdn(qname),
+		Type:  qtype,
+		Class: dns.ClassINET,
+	}.String()
 
-	data, err := c.client.Get(ctx, "dns:"+key).Bytes()
-	if err != nil {
+	// 获取所有成员（RR 记录）
+	members, err := c.client.ZRangeWithScores(ctx, key, 0, -1).Result()
+	if err != nil || len(members) == 0 {
 		return nil, false
 	}
 
-	// 数据格式: [8字节过期时间Unix纳秒][DNS消息二进制]
-	if len(data) < 8 {
-		// 无效数据，删除
-		c.client.Del(ctx, "dns:"+key)
+	now := time.Now().UTC()
+	items := make([]*RRCacheItem, 0, len(members))
+
+	for _, member := range members {
+		data := []byte(member.Member.(string))
+		expireNano := int64(member.Score)
+		expireTime := time.Unix(0, expireNano)
+
+		// 检查是否过期
+		if now.After(expireTime) {
+			// 过期，从 Redis 中删除
+			c.client.ZRem(ctx, key, member.Member)
+			continue
+		}
+
+		// 解析 RR 记录
+		item, err := c.decodeRRCacheItem(data, expireTime)
+		if err != nil {
+			// 解析失败，删除
+			c.client.ZRem(ctx, key, member.Member)
+			continue
+		}
+
+		items = append(items, item)
+	}
+
+	if len(items) == 0 {
+		// 所有记录都过期，删除整个 key
+		c.client.Del(ctx, key)
 		return nil, false
 	}
 
-	// 解析过期时间
-	expireNano := int64(binary.BigEndian.Uint64(data[:8]))
-	expireTime := time.Unix(0, expireNano)
-
-	// 严格检查 TTL
-	if time.Now().After(expireTime) {
-		// 已过期，删除
-		c.client.Del(ctx, "dns:"+key)
-		return nil, false
-	}
-
-	// 解析 DNS 消息
-	msg := new(dns.Msg)
-	if err := msg.Unpack(data[8:]); err != nil {
-		// 解析失败，删除无效缓存
-		c.client.Del(ctx, "dns:"+key)
-		return nil, false
-	}
-
-	return msg, true
+	return items, true
 }
 
-// Set 设置缓存
-func (c *RedisDNSCache) Set(key string, msg *dns.Msg, ttl time.Duration) error {
+// SetRRs 缓存多条 RR 记录
+func (c *RedisDNSCache) SetRRs(qname string, qtype uint16, items []*RRCacheItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
 	ctx := context.Background()
+	key := "dns:" + CacheKey{
+		Name:  dns.Fqdn(qname),
+		Type:  qtype,
+		Class: dns.ClassINET,
+	}.String()
 
-	// 限制最大 TTL
-	if ttl > c.maxTTL {
-		ttl = c.maxTTL
+	now := time.Now().UTC()
+
+	// 使用 pipeline 批量写入
+	pipe := c.client.Pipeline()
+
+	var maxExpire time.Duration
+
+	for _, item := range items {
+		// 限制最大 TTL
+		ttl := time.Duration(item.OrigTTL) * time.Second
+		if ttl > c.maxTTL {
+			ttl = c.maxTTL
+			item.OrigTTL = uint32(c.maxTTL.Seconds())
+		}
+
+		item.StoredAt = now
+		expireTime := now.Add(ttl)
+
+		if ttl > maxExpire {
+			maxExpire = ttl
+		}
+
+		// 编码 RR 记录
+		data, err := c.encodeRRCacheItem(item)
+		if err != nil {
+			return fmt.Errorf("编码RR失败: %w", err)
+		}
+
+		// 使用 ZADD 添加到有序集合，score 为过期时间（纳秒）
+		pipe.ZAdd(ctx, key, redis.Z{
+			Score:  float64(expireTime.UnixNano()),
+			Member: data,
+		})
 	}
 
-	// 序列化 DNS 消息为二进制格式
-	packed, err := msg.Pack()
-	if err != nil {
-		return fmt.Errorf("序列化DNS消息失败: %w", err)
-	}
+	// 设置整个 key 的过期时间（使用最大 TTL + 余量）
+	pipe.Expire(ctx, key, maxExpire+time.Hour)
 
-	// 数据格式: [8字节过期时间Unix纳秒][DNS消息二进制]
-	expireTime := time.Now().Add(ttl)
-	data := make([]byte, 8+len(packed))
-	binary.BigEndian.PutUint64(data[:8], uint64(expireTime.UnixNano()))
-	copy(data[8:], packed)
-
-	// 设置 Redis 过期时间，严格遵守 TTL
-	if err := c.client.Set(ctx, "dns:"+key, data, ttl).Err(); err != nil {
-		return fmt.Errorf("写入 Redis 失败: %w", err)
-	}
-
-	return nil
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
-// Delete 删除缓存
-func (c *RedisDNSCache) Delete(key string) error {
-	ctx := context.Background()
-	return c.client.Del(ctx, "dns:"+key).Err()
+// SetSingleRR 缓存单条 RR 记录
+func (c *RedisDNSCache) SetSingleRR(item *RRCacheItem) error {
+	hdr := item.RR.Header()
+	return c.SetRRs(hdr.Name, hdr.Rrtype, []*RRCacheItem{item})
 }
 
-// Clear 清空缓存
+// DeleteRRs 删除指定 qname 和 qtype 的所有 RR 记录
+func (c *RedisDNSCache) DeleteRRs(qname string, qtype uint16) error {
+	ctx := context.Background()
+	key := "dns:" + CacheKey{
+		Name:  dns.Fqdn(qname),
+		Type:  qtype,
+		Class: dns.ClassINET,
+	}.String()
+
+	return c.client.Del(ctx, key).Err()
+}
+
+// Clear 清空所有 DNS 缓存
 func (c *RedisDNSCache) Clear() error {
 	ctx := context.Background()
 
-	// 删除所有 dns: 前缀的键
 	iter := c.client.Scan(ctx, 0, "dns:*", 0).Iterator()
 	for iter.Next(ctx) {
 		if err := c.client.Del(ctx, iter.Val()).Err(); err != nil {
@@ -110,4 +159,143 @@ func (c *RedisDNSCache) Clear() error {
 	}
 
 	return iter.Err()
+}
+
+// encodeRRCacheItem 编码 RR 缓存项为二进制
+// 格式: [1字节版本][4字节OrigTTL][8字节StoredAt][2字节Rcode][1字节Flags][DNS RR二进制]
+func (c *RedisDNSCache) encodeRRCacheItem(item *RRCacheItem) ([]byte, error) {
+	// 序列化 RR
+	rrData, err := packRR(item.RR)
+	if err != nil {
+		return nil, err
+	}
+
+	// 计算总长度
+	totalLen := 1 + 4 + 8 + 2 + 1 + len(rrData)
+	data := make([]byte, totalLen)
+
+	offset := 0
+
+	// 版本号
+	data[offset] = 1
+	offset++
+
+	// OrigTTL
+	binary.BigEndian.PutUint32(data[offset:], item.OrigTTL)
+	offset += 4
+
+	// StoredAt (Unix 纳秒)
+	binary.BigEndian.PutUint64(data[offset:], uint64(item.StoredAt.UnixNano()))
+	offset += 8
+
+	// Rcode
+	binary.BigEndian.PutUint16(data[offset:], uint16(item.Rcode))
+	offset += 2
+
+	// Flags (AuthData, RecurAvail)
+	var flags byte
+	if item.AuthData {
+		flags |= 0x01
+	}
+	if item.RecurAvail {
+		flags |= 0x02
+	}
+	data[offset] = flags
+	offset++
+
+	// RR 数据
+	copy(data[offset:], rrData)
+
+	return data, nil
+}
+
+// decodeRRCacheItem 从二进制解码 RR 缓存项
+func (c *RedisDNSCache) decodeRRCacheItem(data []byte, expireTime time.Time) (*RRCacheItem, error) {
+	if len(data) < 16 {
+		return nil, fmt.Errorf("数据太短")
+	}
+
+	offset := 0
+
+	// 版本号
+	version := data[offset]
+	if version != 1 {
+		return nil, fmt.Errorf("不支持的版本: %d", version)
+	}
+	offset++
+
+	// OrigTTL
+	origTTL := binary.BigEndian.Uint32(data[offset:])
+	offset += 4
+
+	// StoredAt
+	storedNano := int64(binary.BigEndian.Uint64(data[offset:]))
+	storedAt := time.Unix(0, storedNano)
+	offset += 8
+
+	// Rcode
+	rcode := int(binary.BigEndian.Uint16(data[offset:]))
+	offset += 2
+
+	// Flags
+	flags := data[offset]
+	authData := (flags & 0x01) != 0
+	recurAvail := (flags & 0x02) != 0
+	offset++
+
+	// RR 数据
+	rr, err := unpackRR(data[offset:])
+	if err != nil {
+		return nil, fmt.Errorf("解析RR失败: %w", err)
+	}
+
+	return &RRCacheItem{
+		RR:         rr,
+		OrigTTL:    origTTL,
+		StoredAt:   storedAt,
+		Rcode:      rcode,
+		AuthData:   authData,
+		RecurAvail: recurAvail,
+	}, nil
+}
+
+// packRR 序列化单条 RR 记录
+func packRR(rr dns.RR) ([]byte, error) {
+	// 创建一个临时 DNS 消息
+	msg := new(dns.Msg)
+	msg.Answer = []dns.RR{rr}
+
+	packed, err := msg.Pack()
+	if err != nil {
+		return nil, err
+	}
+
+	// 跳过 DNS 消息头（12 字节）和 Question 段
+	// 我们只需要 Answer 段的数据
+	return packed[12:], nil
+}
+
+// unpackRR 反序列化单条 RR 记录
+func unpackRR(data []byte) (dns.RR, error) {
+	// 构造最小的 DNS 消息格式
+	// Header (12字节) + Question (最小5字节) + Answer (data)
+	minMsg := make([]byte, 12)
+
+	// 设置 Header
+	// ANCOUNT = 1 (有 1 条 Answer)
+	binary.BigEndian.PutUint16(minMsg[6:8], 1)
+
+	// 拼接数据
+	fullData := append(minMsg, data...)
+
+	msg := new(dns.Msg)
+	if err := msg.Unpack(fullData); err != nil {
+		return nil, err
+	}
+
+	if len(msg.Answer) == 0 {
+		return nil, fmt.Errorf("没有Answer记录")
+	}
+
+	return msg.Answer[0], nil
 }
