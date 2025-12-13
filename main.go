@@ -125,6 +125,8 @@ func main() {
 	geoipMatcher, err := geoip.NewMatcher("geoip.dat", "GeoLite2-ASN.mmdb")
 	if err != nil {
 		logger.Warn("初始化 GeoIP Matcher 失败: %v", err)
+		// 创建一个空的 Matcher 避免 nil 指针
+		geoipMatcher, _ = geoip.NewMatcher("", "")
 	} else {
 		logger.Info("GeoIP Matcher 初始化成功")
 	}
