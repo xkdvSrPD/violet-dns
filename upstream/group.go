@@ -110,6 +110,10 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 		return nil, fmt.Errorf("没有可用的 upstream")
 	}
 
+	// 创建可取消的 context，用于取消其他查询
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	resChan := make(chan result, len(g.upstreams))
 
 	for i, u := range g.upstreams {
@@ -120,8 +124,13 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 			resp, err := ups.Exchange(m)
 			queryLatency := time.Since(queryStart)
 
-			if err != nil {
-				g.logger.LogUpstreamError(ctx, domain, nameserver, err, queryLatency)
+			// 检查是否已被取消（第一个成功响应已返回）
+			select {
+			case <-queryCtx.Done():
+				// 查询被取消，不发送结果，不输出日志
+				return
+			default:
+				// 继续发送结果
 			}
 
 			resChan <- result{
@@ -139,6 +148,9 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 		select {
 		case res := <-resChan:
 			if res.err == nil && res.resp != nil {
+				// 取消其他正在进行的查询
+				cancel()
+
 				// DEBUG: 记录成功的响应
 				g.logger.LogUpstreamResponse(ctx, domain, qtype, res.nameserver, uint16(res.resp.Rcode), len(res.resp.Answer), res.latency)
 
@@ -151,11 +163,13 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 			}
 			lastErr = res.err
 		case <-ctx.Done():
+			cancel()
 			g.logger.Debug("上游查询超时: group=%s domain=%s timeout=%v", g.name, domain, g.timeout)
 			return nil, fmt.Errorf("查询超时")
 		}
 	}
 
+	cancel()
 	g.logger.Debug("所有Nameserver查询失败: group=%s domain=%s last_error=%v", g.name, domain, lastErr)
 	return nil, fmt.Errorf("所有 nameserver 查询失败: %v", lastErr)
 }

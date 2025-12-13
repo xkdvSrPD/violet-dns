@@ -79,7 +79,7 @@ DNS 服务器监听指定端口，接收 UDP 查询请求并返回响应。
 **注意事项**:
 - 使用 context.WithTimeout 控制查询超时
 - 实现 singleflight 模式，避免重复查询
-- 查询失败时根据 `fallback_on_error` 配置决定是否重试
+- 并发查询同组所有 nameserver，第一个成功响应后取消其他查询
 - 记录每个上游服务器的响应时间和成功率
 - DoH 查询需要正确处理 HTTP 状态码和 DNS 响应
 

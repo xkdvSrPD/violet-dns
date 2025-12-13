@@ -25,7 +25,6 @@ upstream_group:
     strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
     concurrent_queries: true  # Query A and AAAA in parallel
     timeout: 5s
-    fallback_on_error: true
 
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:

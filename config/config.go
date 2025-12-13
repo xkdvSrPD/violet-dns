@@ -42,7 +42,6 @@ type UpstreamGroupConfig struct {
 	ConcurrentQueries bool          `yaml:"concurrent_queries"`
 	ECSIP             string        `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
 	Timeout           time.Duration `yaml:"timeout"`
-	FallbackOnError   bool          `yaml:"fallback_on_error"`
 }
 
 // OutboundConfig 出站配置

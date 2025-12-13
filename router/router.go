@@ -379,13 +379,13 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 			ipStrs[i] = ip.String()
 		}
 
-		r.logger.LogProxyECSFallback(ctx, domain, "检查proxy_ecs结果IP", map[string]interface{}{
+		r.logger.LogProxyECSFallback(ctx, domain, "判断是否需要fallback到direct", map[string]interface{}{
 			"ips": ipStrs,
 		})
 
 		for _, ip := range ips {
 			if r.geoipMatcher.MatchAny(ip, r.fallbackRules) {
-				r.logger.LogFallback(ctx, domain, "proxy_ecs", "direct", "IP匹配fallback规则")
+				r.logger.LogFallback(ctx, domain, "proxy_ecs", "direct", "执行fallback到direct")
 
 				directResp, err := r.upstreamMgr.Query(ctx, "direct", domain, qtype)
 				if err == nil {
