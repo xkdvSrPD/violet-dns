@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"violet-dns/cache"
 	"violet-dns/category"
 	"violet-dns/config"
@@ -19,12 +19,19 @@ import (
 	"violet-dns/server"
 	"violet-dns/upstream"
 	"violet-dns/utils"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
+	// 解析命令行参数
+	configFile := flag.String("c", "config.yaml", "配置文件路径")
+	flag.Parse()
+
 	// 阶段 1: 配置加载与验证
 	fmt.Println("=== 阶段 1: 配置加载与验证 ===")
-	cfg, err := config.LoadAndValidate("config.yaml")
+	fmt.Printf("加载配置文件: %s\n", *configFile)
+	cfg, err := config.LoadAndValidate(*configFile)
 	if err != nil {
 		fmt.Printf("配置加载失败: %v\n", err)
 		os.Exit(1)
