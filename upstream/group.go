@@ -22,9 +22,7 @@ type Group struct {
 	outbound    outbound.Outbound
 	strategy    string
 	timeout     time.Duration
-	enableECS   bool
-	forceECS    bool
-	ecsIP       string
+	ecsIP       string // 有值则添加 ECS，空则不添加
 	logger      *middleware.Logger
 }
 
@@ -94,8 +92,8 @@ func (g *Group) Query(ctx context.Context, domain string, qtype uint16) (*dns.Ms
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
 
-	// 添加 ECS
-	if g.enableECS && g.ecsIP != "" {
+	// 添加 ECS（仅当配置了 ecs_ip 时）
+	if g.ecsIP != "" {
 		g.addECS(m, g.ecsIP)
 		g.logger.Debug("添加ECS: domain=%s ecs_ip=%s", domain, g.ecsIP)
 	}
@@ -287,10 +285,8 @@ func (g *Group) addECS(m *dns.Msg, ecsIP string) {
 	m.Extra = append(m.Extra, opt)
 }
 
-// SetECS 设置 ECS
-func (g *Group) SetECS(enable, force bool, ecsIP string) {
-	g.enableECS = enable
-	g.forceECS = force
+// SetECS 设置 ECS IP
+func (g *Group) SetECS(ecsIP string) {
 	g.ecsIP = ecsIP
 }
 

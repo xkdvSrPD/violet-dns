@@ -16,7 +16,7 @@ bootstrap:
 
 # Upstream DNS Groups
 upstream_group:
-  # Foreign DNS through proxy
+  # Foreign DNS through proxy (no ECS for privacy)
   proxy:
     nameservers:
       - https://1.1.1.1/dns-query
@@ -24,7 +24,6 @@ upstream_group:
     outbound: hk
     strategy: prefer_ipv4  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
     concurrent_queries: true  # Query A and AAAA in parallel
-    enable_ecs: false  # Don't send ECS to foreign DNS for privacy
     timeout: 5s
     fallback_on_error: true
 
@@ -36,17 +35,15 @@ upstream_group:
     outbound: hk
     strategy: prefer_ipv4
     concurrent_queries: true
-    force_ecs: true
-    ecs_ip: 113.132.219.0/24  # Per-group ECS configuration
+    ecs_ip: 113.132.219.0/24  # Per-group ECS, overrides global default
     timeout: 5s
 
   # Domestic DNS (direct connection)
   direct:
     nameservers:
-      - system  # Use system resolver
+      - 10.115.15.1  # Use system resolver
     strategy: prefer_ipv4
     concurrent_queries: true
-    enable_ecs: true
     timeout: 3s
 
 # Outbound (SOCKS5 Proxies)

@@ -40,9 +40,7 @@ type UpstreamGroupConfig struct {
 	Outbound          string        `yaml:"outbound"`
 	Strategy          string        `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
 	ConcurrentQueries bool          `yaml:"concurrent_queries"`
-	EnableECS         bool          `yaml:"enable_ecs"`
-	ForceECS          bool          `yaml:"force_ecs"`
-	ECSIP             string        `yaml:"ecs_ip"`
+	ECSIP             string        `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
 	Timeout           time.Duration `yaml:"timeout"`
 	FallbackOnError   bool          `yaml:"fallback_on_error"`
 }

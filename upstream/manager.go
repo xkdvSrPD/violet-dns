@@ -70,7 +70,15 @@ func (m *Manager) LoadFromConfig(cfg *config.Config, outbounds map[string]outbou
 		)
 
 		// 设置 ECS
-		group.SetECS(groupCfg.EnableECS, groupCfg.ForceECS, groupCfg.ECSIP)
+		// 逻辑:
+		// 1. 如果 group 配置了 ecs_ip，使用 group 的配置
+		// 2. 如果 group 是 proxy_ecs 且未配置 ecs_ip，且全局 ECS 启用，使用全局默认值
+		// 3. 否则不添加 ECS
+		ecsIP := groupCfg.ECSIP
+		if ecsIP == "" && name == "proxy_ecs" && cfg.ECS.Enable {
+			ecsIP = cfg.ECS.DefaultIPv4
+		}
+		group.SetECS(ecsIP)
 
 		m.AddGroup(name, group)
 	}
