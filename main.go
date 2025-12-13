@@ -51,10 +51,10 @@ func main() {
 		}
 	}
 
-	if err := utils.DownloadFile(cfg.Fallback.GeoIP, "geoip.dat"); err != nil {
-		tmpLogger.Warn("下载 geoip.dat 失败: %v", err)
+	if err := utils.DownloadFile(cfg.Fallback.GeoIP, "Country.mmdb"); err != nil {
+		tmpLogger.Warn("下载 Country.mmdb 失败: %v", err)
 	} else {
-		tmpLogger.Info("geoip.dat 准备就绪")
+		tmpLogger.Info("Country.mmdb 准备就绪")
 	}
 
 	if err := utils.DownloadFile(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb"); err != nil {
@@ -122,7 +122,7 @@ func main() {
 	logger.Info("Logger 初始化成功")
 
 	// 2. 初始化 GeoIP Matcher
-	geoipMatcher, err := geoip.NewMatcher("geoip.dat", "GeoLite2-ASN.mmdb")
+	geoipMatcher, err := geoip.NewMatcher("Country.mmdb", "GeoLite2-ASN.mmdb")
 	if err != nil {
 		logger.Warn("初始化 GeoIP Matcher 失败: %v", err)
 		// 创建一个空的 Matcher 避免 nil 指针

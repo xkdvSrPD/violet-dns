@@ -173,8 +173,8 @@ query_policy:
 
 # Fallback Configuration (for proxy_ecs_fallback policy)
 fallback:
-  geoip: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat'
-  asn: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb'
+  geoip: 'https://github.com/Loyalsoldier/geoip/releases/latest/download/Country.mmdb'
+  asn: 'https://github.com/Loyalsoldier/geoip/releases/latest/download/GeoLite2-ASN.mmdb'
   update: '0 0 3 * * *'  # Update at 3 AM daily
   strategy: race  # Race both proxy_ecs and proxy
   timeout: 3s  # Max wait for proxy_ecs before using proxy result
