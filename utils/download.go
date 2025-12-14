@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -10,8 +11,13 @@ import (
 	"time"
 )
 
-// DownloadFile 下载文件
-func DownloadFile(url, destPath string) error {
+// Outbound 接口（用于下载时通过代理）
+type Outbound interface {
+	Dial(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// DownloadFileWithOutbound 通过指定的 outbound 下载文件
+func DownloadFileWithOutbound(url, destPath string, outbound Outbound) error {
 	// 检查文件是否已存在且大小合理（大于 1KB）
 	if info, err := os.Stat(destPath); err == nil {
 		if info.Size() > 1024 {
@@ -27,10 +33,23 @@ func DownloadFile(url, destPath string) error {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
 
-	// 创建 HTTP 客户端，优先使用 IPv4
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
+	// 创建 HTTP 客户端
+	var transport *http.Transport
+	if outbound != nil {
+		// 使用 outbound 代理
+		transport = &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return outbound.Dial(ctx, network, addr)
+			},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+	} else {
+		// 不使用代理，直连
+		transport = &http.Transport{
 			DialContext: (&net.Dialer{
 				Timeout:   30 * time.Second,
 				KeepAlive: 30 * time.Second,
@@ -40,7 +59,12 @@ func DownloadFile(url, destPath string) error {
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-		},
+		}
+	}
+
+	client := &http.Client{
+		Timeout:   5 * time.Minute,
+		Transport: transport,
 	}
 
 	// 创建请求
@@ -92,6 +116,11 @@ func DownloadFile(url, destPath string) error {
 	}
 
 	return nil
+}
+
+// DownloadFile 下载文件（不使用代理）
+func DownloadFile(url, destPath string) error {
+	return DownloadFileWithOutbound(url, destPath, nil)
 }
 
 // FileExists 检查文件是否存在

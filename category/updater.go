@@ -3,6 +3,7 @@ package category
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/robfig/cron/v3"
 )
@@ -36,7 +37,7 @@ func (u *Updater) Start(ctx context.Context) error {
 	// 添加定时任务
 	_, err := u.cron.AddFunc(u.cronExpr, func() {
 		if err := u.loader.Load(u.filename, u.groupConfig); err != nil {
-			fmt.Printf("更新域名分类失败: %v\n", err)
+			log.Printf("更新域名分类失败: %v\n", err)
 		}
 	})
 	if err != nil {

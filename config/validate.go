@@ -54,11 +54,6 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("fallback: %w", err)
 	}
 
-	// 验证 Performance
-	if err := validatePerformance(&cfg.Performance); err != nil {
-		return fmt.Errorf("performance: %w", err)
-	}
-
 	// 验证 Log
 	if err := validateLog(&cfg.Log); err != nil {
 		return fmt.Errorf("log: %w", err)
@@ -266,13 +261,6 @@ func validateFallback(cfg *FallbackConfig) error {
 		}
 	}
 
-	return nil
-}
-
-func validatePerformance(cfg *PerformanceConfig) error {
-	if cfg.MaxConcurrentQueries <= 0 {
-		return fmt.Errorf("max_concurrent_queries 必须大于 0")
-	}
 	return nil
 }
 

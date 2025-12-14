@@ -3,6 +3,7 @@ package category
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -106,7 +107,7 @@ func (p *Parser) parseCategorySpec(dlcData map[string][]*router.Domain, spec str
 	// 应用属性过滤
 	filtered := p.filterDomainsByAttributes(domainList, attrFilters)
 	if len(filtered) == 0 {
-		fmt.Printf("警告: 分类 %s 应用属性过滤后没有匹配的域名\n", spec)
+		log.Printf("警告: 分类 %s 应用属性过滤后没有匹配的域名\n", spec)
 	}
 
 	return p.extractDomainValues(filtered), nil

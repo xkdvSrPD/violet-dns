@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,7 +35,7 @@ func main() {
 	if *runtimeDir != "" {
 		// 切换到运行目录
 		if err := os.Chdir(*runtimeDir); err != nil {
-			fmt.Printf("切换到运行目录失败: %v\n", err)
+			log.Printf("切换到运行目录失败: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -45,13 +46,18 @@ func main() {
 		} else if _, err := os.Stat("config.yml"); err == nil {
 			*configFile = "config.yml"
 		} else {
-			fmt.Printf("运行目录中未找到 config.yaml 或 config.yml\n")
+			log.Printf("运行目录中未找到 config.yaml 或 config.yml\n")
 			os.Exit(1)
 		}
 	}
 
 	// 先创建一个临时 logger 用于启动阶段（配置还没加载）
-	tmpLogger := middleware.NewLogger("info", "text")
+	tmpLoggerCfg := &middleware.LogConfig{
+		Level:  "info",
+		Format: "text",
+		Output: "stdout",
+	}
+	tmpLogger := middleware.NewLogger(tmpLoggerCfg)
 
 	// 阶段 1: 配置加载与验证
 	tmpLogger.Info("=== 阶段 1: 配置加载与验证 ===")
@@ -63,33 +69,74 @@ func main() {
 	}
 	tmpLogger.Info("配置加载成功")
 
-	// 阶段 2: 外部文件下载
-	tmpLogger.Info("=== 阶段 2: 外部文件下载 ===")
+	// 阶段 2: 初始化文件下载代理
+	tmpLogger.Info("=== 阶段 2: 初始化文件下载代理 ===")
+
+	// 查找 file_download outbound
+	var fileDownloadOutbound outbound.Outbound
+	for _, obCfg := range cfg.Outbound {
+		if obCfg.Tag == "file_download" {
+			if !obCfg.Enable {
+				tmpLogger.Info("file_download outbound 已禁用，将使用直连下载")
+				break
+			}
+
+			if obCfg.Type == "socks5" {
+				ob, err := outbound.NewSOCKS5Outbound(obCfg.Server, obCfg.Port, obCfg.Username, obCfg.Password)
+				if err != nil {
+					tmpLogger.Error("创建 file_download SOCKS5 出站失败: %v", err)
+					tmpLogger.Error("文件下载代理初始化失败，程序退出")
+					os.Exit(1)
+				}
+				fileDownloadOutbound = ob
+				tmpLogger.Info("file_download outbound 初始化成功: %s:%d", obCfg.Server, obCfg.Port)
+
+				// 测试连接
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				testConn, err := ob.Dial(ctx, "tcp", "www.google.com:443")
+				if err != nil {
+					tmpLogger.Error("file_download outbound 连接测试失败: %v", err)
+					tmpLogger.Error("代理无法连接，程序退出")
+					os.Exit(1)
+				}
+				testConn.Close()
+				tmpLogger.Info("file_download outbound 连接测试成功")
+			}
+			break
+		}
+	}
+
+	// 阶段 3: 外部文件下载
+	tmpLogger.Info("=== 阶段 3: 外部文件下载 ===")
 
 	// 下载 dlc.dat
-	if err := utils.DownloadFile(cfg.CategoryPolicy.Preload.File, "dlc.dat"); err != nil {
-		tmpLogger.Warn("下载 dlc.dat 失败: %v", err)
-	} else {
-		tmpLogger.Info("dlc.dat 准备就绪")
+	if err := utils.DownloadFileWithOutbound(cfg.CategoryPolicy.Preload.File, "dlc.dat", fileDownloadOutbound); err != nil {
+		tmpLogger.Error("下载 dlc.dat 失败: %v", err)
+		tmpLogger.Error("文件下载失败，程序退出")
+		os.Exit(1)
 	}
+	tmpLogger.Info("dlc.dat 准备就绪")
 
 	// Load 模式：仅需要下载 dlc.dat，不需要下载 GeoIP 文件
 	if !*loadMode {
-		if err := utils.DownloadFile(cfg.Fallback.GeoIP, "Country.mmdb"); err != nil {
-			tmpLogger.Warn("下载 Country.mmdb 失败: %v", err)
-		} else {
-			tmpLogger.Info("Country.mmdb 准备就绪")
+		if err := utils.DownloadFileWithOutbound(cfg.Fallback.GeoIP, "Country.mmdb", fileDownloadOutbound); err != nil {
+			tmpLogger.Error("下载 Country.mmdb 失败: %v", err)
+			tmpLogger.Error("文件下载失败，程序退出")
+			os.Exit(1)
 		}
+		tmpLogger.Info("Country.mmdb 准备就绪")
 
-		if err := utils.DownloadFile(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb"); err != nil {
-			tmpLogger.Warn("下载 GeoLite2-ASN.mmdb 失败: %v", err)
-		} else {
-			tmpLogger.Info("GeoLite2-ASN.mmdb 准备就绪")
+		if err := utils.DownloadFileWithOutbound(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb", fileDownloadOutbound); err != nil {
+			tmpLogger.Error("下载 GeoLite2-ASN.mmdb 失败: %v", err)
+			tmpLogger.Error("文件下载失败，程序退出")
+			os.Exit(1)
 		}
+		tmpLogger.Info("GeoLite2-ASN.mmdb 准备就绪")
 	}
 
-	// 阶段 3: 数据预加载
-	tmpLogger.Info("=== 阶段 3: 数据预加载 ===")
+	// 阶段 4: 数据预加载
+	tmpLogger.Info("=== 阶段 4: 数据预加载 ===")
 
 	// 创建 Redis 客户端
 	var redisClient *redis.Client
@@ -154,11 +201,39 @@ func main() {
 	// 正常模式：不执行预加载（预加载通过 -load 模式单独执行）
 	tmpLogger.Info("跳过域名分类预加载（使用 -load 参数单独执行）")
 
-	// 阶段 4: 组件初始化
-	tmpLogger.Info("=== 阶段 4: 组件初始化 ===")
+	// 阶段 5: 组件初始化
+	tmpLogger.Info("=== 阶段 5: 组件初始化 ===")
 
 	// 1. 初始化 Logger（需要最先初始化，其他组件会用到）
-	logger := middleware.NewLogger(cfg.Log.Level, cfg.Log.Format)
+	loggerCfg := &middleware.LogConfig{
+		Level:          cfg.Log.Level,
+		Format:         cfg.Log.Format,
+		Output:         cfg.Log.Output,
+		MaxSize:        cfg.Log.MaxSize,
+		MaxAge:         cfg.Log.MaxAge,
+		MaxBackups:     cfg.Log.MaxBackups,
+		Compress:       cfg.Log.Compress,
+		TotalSizeLimit: cfg.Log.TotalSizeLimit,
+	}
+	// 如果没有指定输出文件，默认输出到运行目录的 violet-dns.log
+	if loggerCfg.Output == "" || loggerCfg.Output == "stdout" {
+		// 保持 stdout
+	} else if loggerCfg.Output == "file" || loggerCfg.Output == "default" {
+		loggerCfg.Output = "violet-dns.log"
+	}
+	// 设置默认值
+	if loggerCfg.MaxSize == 0 {
+		loggerCfg.MaxSize = 100 // 默认 100MB
+	}
+	if loggerCfg.MaxAge == 0 {
+		loggerCfg.MaxAge = 7 // 默认保留 7 天
+	}
+	if loggerCfg.MaxBackups == 0 {
+		loggerCfg.MaxBackups = 10 // 默认保留 10 个备份
+	}
+
+	logger := middleware.NewLogger(loggerCfg)
+	defer logger.Close() // 确保程序退出时关闭日志文件
 	logger.Info("Logger 初始化成功")
 
 	// 2. 初始化 GeoIP Matcher
@@ -227,8 +302,8 @@ func main() {
 	}
 	logger.Info("Query Router 初始化成功")
 
-	// 阶段 5: 启动服务
-	logger.Info("=== 阶段 5: 启动服务 ===")
+	// 阶段 6: 启动服务
+	logger.Info("=== 阶段 6: 启动服务 ===")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

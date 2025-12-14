@@ -48,6 +48,15 @@ outbound:
   - tag: direct
     type: direct  # Built-in, no proxy
 
+  - tag: file_download
+    type: socks5
+    enable: true
+    server: 127.0.0.1
+    port: 17890
+    username: hk
+    password: hk
+    udp: true  # Enable UDP over SOCKS5
+
   - tag: hk
     type: socks5
     enable: true
@@ -167,8 +176,8 @@ fallback:
   update: '0 0 7 * * *'  # Update at 3 AM daily
   strategy: race  # Race both proxy_ecs and proxy
   rule:
-#    - geoip:cn
-#    - geoip:private
+    - geoip:cn
+    - geoip:private
     - asn:4134  # China Telecom
     - asn:4837  # China Unicom
     - asn:9808  # China Mobile
@@ -182,10 +191,3 @@ performance:
 log:
   level: debug  # debug, info, warn, error
   format: json  # or: text
-  output: stdout  # or: file path
-
-  warnings:
-    large_domain_groups: 10000  # Warn if group >10k domains
-    many_nameservers: 10  # Warn if >10 servers per group
-    clear_cache_enabled: true  # Warn if clear: true
-    missing_retry: true  # Warn if retry not configured

@@ -12,7 +12,6 @@ type Config struct {
 	CategoryPolicy CategoryPolicyConfig            `yaml:"category_policy"`
 	QueryPolicy    []QueryPolicyConfig             `yaml:"query_policy"`
 	Fallback       FallbackConfig                  `yaml:"fallback"`
-	Performance    PerformanceConfig               `yaml:"performance"`
 	Log            LogConfig                       `yaml:"log"`
 }
 
@@ -30,9 +29,11 @@ type BootstrapConfig struct {
 
 // UpstreamGroupConfig 上游 DNS 组配置
 type UpstreamGroupConfig struct {
-	Nameservers []string `yaml:"nameservers"`
-	Outbound    string   `yaml:"outbound"`
-	ECSIP       string   `yaml:"ecs_ip"` // 有值则添加 ECS，否则不添加
+	Nameservers        []string `yaml:"nameservers"`
+	Outbound           string   `yaml:"outbound"`
+	ECSIP              string   `yaml:"ecs_ip"`              // 有值则添加 ECS，否则不添加
+	ResolveNameservers []string `yaml:"resolve_nameservers"` // 用于解析 nameservers 中的域名
+	ResolveStrategy    string   `yaml:"resolve_strategy"`    // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
 }
 
 // OutboundConfig 出站配置
@@ -127,14 +128,14 @@ type FallbackConfig struct {
 	Rule     []string `yaml:"rule"`
 }
 
-// PerformanceConfig 性能配置
-type PerformanceConfig struct {
-	MaxConcurrentQueries int `yaml:"max_concurrent_queries"`
-}
-
 // LogConfig 日志配置
 type LogConfig struct {
-	Level  string `yaml:"level"`  // debug, info, warn, error
-	Format string `yaml:"format"` // json, text
-	Output string `yaml:"output"` // stdout, file path
+	Level          string `yaml:"level"`            // debug, info, warn, error
+	Format         string `yaml:"format"`           // json, text
+	Output         string `yaml:"output"`           // stdout, file path
+	MaxSize        int    `yaml:"max_size"`         // 单个日志文件最大大小(MB)
+	MaxAge         int    `yaml:"max_age"`          // 日志文件保留天数
+	MaxBackups     int    `yaml:"max_backups"`      // 保留的旧日志文件数量
+	Compress       bool   `yaml:"compress"`         // 是否压缩旧日志文件
+	TotalSizeLimit int    `yaml:"total_size_limit"` // 所有日志文件总大小限制(MB)
 }

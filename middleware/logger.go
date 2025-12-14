@@ -3,11 +3,15 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // ContextKey 用于在 context 中存储 trace_id
@@ -17,16 +21,29 @@ const TraceIDKey ContextKey = "trace_id"
 
 // Logger 日志中间件
 type Logger struct {
-	log   *logrus.Logger
-	level string
+	log    *logrus.Logger
+	level  string
+	closer io.Closer // 用于关闭文件句柄
+}
+
+// LogConfig 日志配置（简化版本）
+type LogConfig struct {
+	Level          string
+	Format         string
+	Output         string
+	MaxSize        int
+	MaxAge         int
+	MaxBackups     int
+	Compress       bool
+	TotalSizeLimit int
 }
 
 // NewLogger 创建日志中间件
-func NewLogger(level, format string) *Logger {
+func NewLogger(cfg *LogConfig) *Logger {
 	log := logrus.New()
 
 	// 设置日志级别
-	switch level {
+	switch cfg.Level {
 	case "debug":
 		log.SetLevel(logrus.DebugLevel)
 	case "info":
@@ -40,7 +57,7 @@ func NewLogger(level, format string) *Logger {
 	}
 
 	// 设置格式
-	if format == "json" {
+	if cfg.Format == "json" {
 		log.SetFormatter(&logrus.JSONFormatter{
 			TimestampFormat:   "2006-01-02T15:04:05.000Z07:00",
 			DisableHTMLEscape: true, // 禁用 HTML 转义，避免 > 被转义为 \u003e
@@ -57,9 +74,115 @@ func NewLogger(level, format string) *Logger {
 		})
 	}
 
+	var closer io.Closer
+
+	// 设置输出
+	if cfg.Output == "" || cfg.Output == "stdout" {
+		log.SetOutput(os.Stdout)
+	} else {
+		// 确保日志目录存在
+		logDir := filepath.Dir(cfg.Output)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "创建日志目录失败: %v\n", err)
+			log.SetOutput(os.Stdout)
+		} else {
+			// 使用 lumberjack 进行日志轮转
+			lumberjackLogger := &lumberjack.Logger{
+				Filename:   cfg.Output,
+				MaxSize:    cfg.MaxSize,    // MB
+				MaxAge:     cfg.MaxAge,     // days
+				MaxBackups: cfg.MaxBackups, // 保留文件数
+				Compress:   cfg.Compress,   // 是否压缩
+			}
+			log.SetOutput(lumberjackLogger)
+			closer = lumberjackLogger
+
+			// 如果配置了总大小限制，启动后台清理任务
+			if cfg.TotalSizeLimit > 0 {
+				go cleanupOldLogs(cfg.Output, cfg.TotalSizeLimit, lumberjackLogger)
+			}
+		}
+	}
+
 	return &Logger{
-		log:   log,
-		level: level,
+		log:    log,
+		level:  cfg.Level,
+		closer: closer,
+	}
+}
+
+// Close 关闭日志文件句柄
+func (l *Logger) Close() error {
+	if l.closer != nil {
+		return l.closer.Close()
+	}
+	return nil
+}
+
+// cleanupOldLogs 后台清理旧日志文件以满足总大小限制
+func cleanupOldLogs(logFile string, totalSizeLimitMB int, logger *lumberjack.Logger) {
+	ticker := time.NewTicker(1 * time.Hour) // 每小时检查一次
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// 获取日志目录
+		logDir := filepath.Dir(logFile)
+		baseName := filepath.Base(logFile)
+
+		// 查找所有相关的日志文件
+		files, err := filepath.Glob(filepath.Join(logDir, baseName+"*"))
+		if err != nil {
+			continue
+		}
+
+		// 计算总大小
+		var totalSize int64
+		type fileInfo struct {
+			path    string
+			size    int64
+			modTime time.Time
+		}
+		var fileInfos []fileInfo
+
+		for _, file := range files {
+			info, err := os.Stat(file)
+			if err != nil {
+				continue
+			}
+			totalSize += info.Size()
+			fileInfos = append(fileInfos, fileInfo{
+				path:    file,
+				size:    info.Size(),
+				modTime: info.ModTime(),
+			})
+		}
+
+		// 如果超过总大小限制，删除最旧的文件
+		limitBytes := int64(totalSizeLimitMB) * 1024 * 1024
+		if totalSize > limitBytes {
+			// 按修改时间排序（旧的在前）
+			for i := 0; i < len(fileInfos)-1; i++ {
+				for j := i + 1; j < len(fileInfos); j++ {
+					if fileInfos[i].modTime.After(fileInfos[j].modTime) {
+						fileInfos[i], fileInfos[j] = fileInfos[j], fileInfos[i]
+					}
+				}
+			}
+
+			// 删除最旧的文件直到满足大小限制
+			for _, fi := range fileInfos {
+				if totalSize <= limitBytes {
+					break
+				}
+				// 不删除当前正在使用的日志文件
+				if fi.path == logFile {
+					continue
+				}
+				if err := os.Remove(fi.path); err == nil {
+					totalSize -= fi.size
+				}
+			}
+		}
 	}
 }
 

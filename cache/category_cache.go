@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -118,7 +119,7 @@ func (c *RedisCategoryCache) BatchSet(data map[string]string) error {
 	totalWritten := 0
 	totalItems := len(data)
 
-	fmt.Printf("开始批量写入 %d 条域名分类到 Redis (每批 %d 条)...\n", totalItems, batchSize)
+	log.Printf("开始批量写入 %d 条域名分类到 Redis (每批 %d 条)...\n", totalItems, batchSize)
 
 	for domain, category := range data {
 		batch[domain] = category
@@ -133,7 +134,7 @@ func (c *RedisCategoryCache) BatchSet(data map[string]string) error {
 
 			// 每 10 批显示一次进度
 			if totalWritten%1000 == 0 || totalWritten == totalItems {
-				fmt.Printf("进度: %d/%d (%.1f%%)\n", totalWritten, totalItems, float64(totalWritten)/float64(totalItems)*100)
+				log.Printf("进度: %d/%d (%.1f%%)\n", totalWritten, totalItems, float64(totalWritten)/float64(totalItems)*100)
 			}
 
 			// 重置批次
@@ -151,10 +152,10 @@ func (c *RedisCategoryCache) BatchSet(data map[string]string) error {
 			return fmt.Errorf("批量写入失败 (最后一批): %w", err)
 		}
 		totalWritten += len(batch)
-		fmt.Printf("进度: %d/%d (100.0%%)\n", totalWritten, totalItems)
+		log.Printf("进度: %d/%d (100.0%%)\n", totalWritten, totalItems)
 	}
 
-	fmt.Printf("批量写入完成，共写入 %d 条域名分类\n", totalWritten)
+	log.Printf("批量写入完成，共写入 %d 条域名分类\n", totalWritten)
 	return nil
 }
 
@@ -168,12 +169,12 @@ func (c *RedisCategoryCache) executeBatchWithRetry(ctx context.Context, batch ma
 			// 如果失败，等待后重试
 			if i < maxRetries-1 {
 				waitTime := time.Duration(i+1) * 100 * time.Millisecond
-				fmt.Printf("批次写入失败 (第 %d/%d 次尝试): %v，%v 后重试...\n", i+1, maxRetries, err, waitTime)
+				log.Printf("批次写入失败 (第 %d/%d 次尝试): %v，%v 后重试...\n", i+1, maxRetries, err, waitTime)
 				time.Sleep(waitTime)
 
 				// 测试连接是否还活着
 				if err := c.client.Ping(ctx).Err(); err != nil {
-					fmt.Printf("Redis 连接已断开: %v\n", err)
+					log.Printf("Redis 连接已断开: %v\n", err)
 					return fmt.Errorf("Redis 连接断开: %w", err)
 				}
 			}
