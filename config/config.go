@@ -93,7 +93,6 @@ type CategoryPolicyConfig struct {
 
 // PreloadConfig 预加载配置
 type PreloadConfig struct {
-	Enable      bool                `yaml:"enable"`
 	File        string              `yaml:"file"`
 	Update      string              `yaml:"update"` // cron 表达式
 	DomainGroup map[string][]string `yaml:"domain_group"`

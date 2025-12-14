@@ -193,12 +193,8 @@ func validateCache(cache *CacheConfig, redis *RedisConfig) error {
 }
 
 func validateCategoryPolicy(cfg *CategoryPolicyConfig) error {
-	if !cfg.Preload.Enable {
-		return nil
-	}
-
 	if cfg.Preload.File == "" {
-		return fmt.Errorf("preload 启用时必须配置 file")
+		return fmt.Errorf("preload.file 必须配置")
 	}
 
 	return nil

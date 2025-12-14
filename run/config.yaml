@@ -99,7 +99,6 @@ redis:
 # Domain Categorization Policy
 category_policy:
   preload:
-    enable: true
     file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
     domain_group:
       ads_site:

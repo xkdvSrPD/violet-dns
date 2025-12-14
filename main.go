@@ -27,6 +27,7 @@ func main() {
 	// 解析命令行参数
 	configFile := flag.String("c", "config.yaml", "配置文件路径")
 	runtimeDir := flag.String("d", "", "运行目录（配置文件和数据文件的目录）")
+	loadMode := flag.Bool("load", false, "预加载模式：加载域名分类到 Redis 后退出")
 	flag.Parse()
 
 	// 如果指定了运行目录，切换到该目录并查找配置文件
@@ -64,24 +65,27 @@ func main() {
 
 	// 阶段 2: 外部文件下载
 	tmpLogger.Info("=== 阶段 2: 外部文件下载 ===")
-	if cfg.CategoryPolicy.Preload.Enable {
-		if err := utils.DownloadFile(cfg.CategoryPolicy.Preload.File, "dlc.dat"); err != nil {
-			tmpLogger.Warn("下载 dlc.dat 失败: %v", err)
+
+	// 下载 dlc.dat
+	if err := utils.DownloadFile(cfg.CategoryPolicy.Preload.File, "dlc.dat"); err != nil {
+		tmpLogger.Warn("下载 dlc.dat 失败: %v", err)
+	} else {
+		tmpLogger.Info("dlc.dat 准备就绪")
+	}
+
+	// Load 模式：仅需要下载 dlc.dat，不需要下载 GeoIP 文件
+	if !*loadMode {
+		if err := utils.DownloadFile(cfg.Fallback.GeoIP, "Country.mmdb"); err != nil {
+			tmpLogger.Warn("下载 Country.mmdb 失败: %v", err)
 		} else {
-			tmpLogger.Info("dlc.dat 准备就绪")
+			tmpLogger.Info("Country.mmdb 准备就绪")
 		}
-	}
 
-	if err := utils.DownloadFile(cfg.Fallback.GeoIP, "Country.mmdb"); err != nil {
-		tmpLogger.Warn("下载 Country.mmdb 失败: %v", err)
-	} else {
-		tmpLogger.Info("Country.mmdb 准备就绪")
-	}
-
-	if err := utils.DownloadFile(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb"); err != nil {
-		tmpLogger.Warn("下载 GeoLite2-ASN.mmdb 失败: %v", err)
-	} else {
-		tmpLogger.Info("GeoLite2-ASN.mmdb 准备就绪")
+		if err := utils.DownloadFile(cfg.Fallback.ASN, "GeoLite2-ASN.mmdb"); err != nil {
+			tmpLogger.Warn("下载 GeoLite2-ASN.mmdb 失败: %v", err)
+		} else {
+			tmpLogger.Info("GeoLite2-ASN.mmdb 准备就绪")
+		}
 	}
 
 	// 阶段 3: 数据预加载
@@ -126,15 +130,27 @@ func main() {
 		categoryCache = cache.NewMemoryCategoryCache()
 	}
 
-	// 预加载域名分类
-	if cfg.CategoryPolicy.Preload.Enable {
-		loader := category.NewLoader(categoryCache)
-		if err := loader.Load("dlc.dat", cfg.CategoryPolicy.Preload.DomainGroup); err != nil {
-			tmpLogger.Warn("预加载域名分类失败: %v", err)
-		} else {
-			tmpLogger.Info("域名分类预加载成功")
+	// Load 模式：倒序加载域名分类到 Redis 后退出
+	if *loadMode {
+		tmpLogger.Info("=== Load 模式：倒序加载域名分类 ===")
+
+		if categoryCache == nil {
+			tmpLogger.Error("Load 模式需要 Redis 缓存，但 Redis 连接失败")
+			os.Exit(1)
 		}
+
+		loader := category.NewLoader(categoryCache)
+		if err := loader.LoadReverse("dlc.dat", cfg.CategoryPolicy.Preload.DomainGroup); err != nil {
+			tmpLogger.Error("倒序加载域名分类失败: %v", err)
+			os.Exit(1)
+		}
+
+		tmpLogger.Info("域名分类倒序加载成功，程序退出")
+		os.Exit(0)
 	}
+
+	// 正常模式：不执行预加载（预加载通过 -load 模式单独执行）
+	tmpLogger.Info("跳过域名分类预加载（使用 -load 参数单独执行）")
 
 	// 阶段 4: 组件初始化
 	tmpLogger.Info("=== 阶段 4: 组件初始化 ===")
