@@ -122,10 +122,6 @@ func main() {
 	var categoryCache cache.CategoryCache
 	if cfg.Cache.CategoryCache.Type == "redis" && redisClient != nil {
 		categoryCache = cache.NewRedisCategoryCache(redisClient)
-		if cfg.Cache.CategoryCache.Clear {
-			categoryCache.Clear()
-			tmpLogger.Info("已清空分类缓存")
-		}
 	} else {
 		categoryCache = cache.NewMemoryCategoryCache()
 	}
@@ -137,6 +133,12 @@ func main() {
 		if categoryCache == nil {
 			tmpLogger.Error("Load 模式需要 Redis 缓存，但 Redis 连接失败")
 			os.Exit(1)
+		}
+
+		// 根据配置决定是否清空缓存
+		if cfg.Cache.CategoryCache.Clear {
+			categoryCache.Clear()
+			tmpLogger.Info("已清空分类缓存")
 		}
 
 		loader := category.NewLoader(categoryCache)
