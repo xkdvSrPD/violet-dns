@@ -25,15 +25,15 @@ upstream_group:
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_ecs:
     nameservers:
-      - https://n.xns.one/nK92WKAW_0A/dns-query
-      - https://v.xns.one/nK92WKAW_0A/dns-query
+      - https://8.8.8.8/dns-query
+      - https://8.8.4.4/dns-query
     outbound: hk
 
   # Foreign DNS through proxy with ECS (for CDN optimization)
   proxy_us:
     nameservers:
-      - https://n.xns.one/nK92WKAW_0A/dns-query
-      - https://v.xns.one/nK92WKAW_0A/dns-query
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
     outbound: us
 
 
@@ -167,8 +167,8 @@ fallback:
   update: '0 0 7 * * *'  # Update at 3 AM daily
   strategy: race  # Race both proxy_ecs and proxy
   rule:
-    - geoip:cn
-    - geoip:private
+#    - geoip:cn
+#    - geoip:private
     - asn:4134  # China Telecom
     - asn:4837  # China Unicom
     - asn:9808  # China Mobile
