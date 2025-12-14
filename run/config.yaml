@@ -102,7 +102,7 @@ cache:
 redis:
   server: 10.115.15.25
   port: 6379
-  database: 7
+  database: 8
   password: "violet-dns-secure-2024"
   max_retries: 3
   pool_size: 10
@@ -120,10 +120,7 @@ category_policy:
         - category-games
       proxy_site:
         - google
-        - geolocation-!cn
-        - geolocation-cn@!cn
       direct_site:
-        - cn
 
 
 # Query Routing Policy (matched top-down)

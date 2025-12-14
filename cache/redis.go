@@ -2,7 +2,7 @@ package cache
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -161,141 +161,63 @@ func (c *RedisDNSCache) Clear() error {
 	return iter.Err()
 }
 
-// encodeRRCacheItem 编码 RR 缓存项为二进制
-// 格式: [1字节版本][4字节OrigTTL][8字节StoredAt][2字节Rcode][1字节Flags][DNS RR二进制]
-func (c *RedisDNSCache) encodeRRCacheItem(item *RRCacheItem) ([]byte, error) {
-	// 序列化 RR
-	rrData, err := packRR(item.RR)
-	if err != nil {
-		return nil, err
-	}
-
-	// 计算总长度
-	totalLen := 1 + 4 + 8 + 2 + 1 + len(rrData)
-	data := make([]byte, totalLen)
-
-	offset := 0
-
-	// 版本号
-	data[offset] = 1
-	offset++
-
-	// OrigTTL
-	binary.BigEndian.PutUint32(data[offset:], item.OrigTTL)
-	offset += 4
-
-	// StoredAt (Unix 纳秒)
-	binary.BigEndian.PutUint64(data[offset:], uint64(item.StoredAt.UnixNano()))
-	offset += 8
-
-	// Rcode
-	binary.BigEndian.PutUint16(data[offset:], uint16(item.Rcode))
-	offset += 2
-
-	// Flags (AuthData, RecurAvail)
-	var flags byte
-	if item.AuthData {
-		flags |= 0x01
-	}
-	if item.RecurAvail {
-		flags |= 0x02
-	}
-	data[offset] = flags
-	offset++
-
-	// RR 数据
-	copy(data[offset:], rrData)
-
-	return data, nil
+// rrCacheJSON RR 缓存项的 JSON 表示（可读格式）
+type rrCacheJSON struct {
+	RRString   string `json:"rr"`          // RR 的文本表示（如 "example.com. 300 IN A 1.2.3.4"）
+	RRType     string `json:"type"`        // 记录类型（如 "A", "AAAA", "CNAME"）
+	OrigTTL    uint32 `json:"orig_ttl"`    // 原始 TTL（秒）
+	StoredAt   string `json:"stored_at"`   // 缓存时间（RFC3339 格式）
+	Rcode      string `json:"rcode"`       // 响应码（如 "NOERROR", "NXDOMAIN"）
+	AuthData   bool   `json:"auth_data"`   // AD 位
+	RecurAvail bool   `json:"recur_avail"` // RA 位
 }
 
-// decodeRRCacheItem 从二进制解码 RR 缓存项
+// encodeRRCacheItem 编码 RR 缓存项为 JSON 格式
+func (c *RedisDNSCache) encodeRRCacheItem(item *RRCacheItem) ([]byte, error) {
+	jsonItem := rrCacheJSON{
+		RRString:   item.RR.String(),
+		RRType:     dns.TypeToString[item.RR.Header().Rrtype],
+		OrigTTL:    item.OrigTTL,
+		StoredAt:   item.StoredAt.Format(time.RFC3339Nano),
+		Rcode:      dns.RcodeToString[item.Rcode],
+		AuthData:   item.AuthData,
+		RecurAvail: item.RecurAvail,
+	}
+
+	return json.Marshal(jsonItem)
+}
+
+// decodeRRCacheItem 从 JSON 解码 RR 缓存项
 func (c *RedisDNSCache) decodeRRCacheItem(data []byte, expireTime time.Time) (*RRCacheItem, error) {
-	if len(data) < 16 {
-		return nil, fmt.Errorf("数据太短")
+	var jsonItem rrCacheJSON
+	if err := json.Unmarshal(data, &jsonItem); err != nil {
+		return nil, fmt.Errorf("JSON 解析失败: %w", err)
 	}
 
-	offset := 0
-
-	// 版本号
-	version := data[offset]
-	if version != 1 {
-		return nil, fmt.Errorf("不支持的版本: %d", version)
-	}
-	offset++
-
-	// OrigTTL
-	origTTL := binary.BigEndian.Uint32(data[offset:])
-	offset += 4
-
-	// StoredAt
-	storedNano := int64(binary.BigEndian.Uint64(data[offset:]))
-	storedAt := time.Unix(0, storedNano)
-	offset += 8
-
-	// Rcode
-	rcode := int(binary.BigEndian.Uint16(data[offset:]))
-	offset += 2
-
-	// Flags
-	flags := data[offset]
-	authData := (flags & 0x01) != 0
-	recurAvail := (flags & 0x02) != 0
-	offset++
-
-	// RR 数据
-	rr, err := unpackRR(data[offset:])
+	// 解析 RR 字符串
+	rr, err := dns.NewRR(jsonItem.RRString)
 	if err != nil {
-		return nil, fmt.Errorf("解析RR失败: %w", err)
+		return nil, fmt.Errorf("解析 RR 字符串失败: %w", err)
+	}
+
+	// 解析存储时间
+	storedAt, err := time.Parse(time.RFC3339Nano, jsonItem.StoredAt)
+	if err != nil {
+		return nil, fmt.Errorf("解析时间失败: %w", err)
+	}
+
+	// 解析 Rcode
+	rcode, ok := dns.StringToRcode[jsonItem.Rcode]
+	if !ok {
+		return nil, fmt.Errorf("未知的 Rcode: %s", jsonItem.Rcode)
 	}
 
 	return &RRCacheItem{
 		RR:         rr,
-		OrigTTL:    origTTL,
+		OrigTTL:    jsonItem.OrigTTL,
 		StoredAt:   storedAt,
 		Rcode:      rcode,
-		AuthData:   authData,
-		RecurAvail: recurAvail,
+		AuthData:   jsonItem.AuthData,
+		RecurAvail: jsonItem.RecurAvail,
 	}, nil
-}
-
-// packRR 序列化单条 RR 记录
-func packRR(rr dns.RR) ([]byte, error) {
-	// 创建一个临时 DNS 消息
-	msg := new(dns.Msg)
-	msg.Answer = []dns.RR{rr}
-
-	packed, err := msg.Pack()
-	if err != nil {
-		return nil, err
-	}
-
-	// 跳过 DNS 消息头（12 字节）和 Question 段
-	// 我们只需要 Answer 段的数据
-	return packed[12:], nil
-}
-
-// unpackRR 反序列化单条 RR 记录
-func unpackRR(data []byte) (dns.RR, error) {
-	// 构造最小的 DNS 消息格式
-	// Header (12字节) + Question (最小5字节) + Answer (data)
-	minMsg := make([]byte, 12)
-
-	// 设置 Header
-	// ANCOUNT = 1 (有 1 条 Answer)
-	binary.BigEndian.PutUint16(minMsg[6:8], 1)
-
-	// 拼接数据
-	fullData := append(minMsg, data...)
-
-	msg := new(dns.Msg)
-	if err := msg.Unpack(fullData); err != nil {
-		return nil, err
-	}
-
-	if len(msg.Answer) == 0 {
-		return nil, fmt.Errorf("没有Answer记录")
-	}
-
-	return msg.Answer[0], nil
 }

@@ -475,3 +475,8 @@ MIT License
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。
+
+
+```sh
+ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o violet-dns-openwrt
+```
