@@ -51,19 +51,19 @@ outbound:
   - tag: hk
     type: socks5
     enable: true
-    server: 10.115.15.1
-    port: 7890
-    username: violet
-    password: Dd112211
+    server: 127.0.0.1
+    port: 17890
+    username: hk
+    password: hk
     udp: true  # Enable UDP over SOCKS5
 
   - tag: us
     type: socks5
     enable: true
-    server: 10.115.15.1
-    port: 7891
-    username: violet
-    password: Dd112211
+    server: 127.0.0.1
+    port: 17891
+    username: us
+    password: us
     udp: true
 
 # ECS (EDNS Client Subnet) Global Configuration
@@ -102,18 +102,19 @@ category_policy:
     enable: true
     file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
     domain_group:
+      ads_site:
+        - category-ads-all
+      ai_site:
+        - category-ai-chat-!cn
+      game_domain:
+        - category-games
       proxy_site:
         - google
         - geolocation-!cn
         - geolocation-cn@!cn
       direct_site:
         - cn
-      game_domain:
-        - category-games
-      ads_site:
-        - category-ads-all
-      ai_site:
-        - category-ai-chat-!cn
+
 
 # Query Routing Policy (matched top-down)
 query_policy:

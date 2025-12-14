@@ -1,9 +1,12 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -23,6 +26,173 @@ type Group struct {
 	timeout     time.Duration
 	ecsIP       string // 有值则添加 ECS，空则不添加
 	logger      *middleware.Logger
+}
+
+// proxyUpstream 通过 outbound 代理进行 DNS 查询的 upstream 实现
+type proxyUpstream struct {
+	address  string            // DNS 服务器地址 (e.g., "8.8.8.8:53" 或 "https://dns.google/dns-query")
+	protocol string            // 协议: "udp", "tcp", "https"
+	outbound outbound.Outbound // 出站代理
+	timeout  time.Duration
+}
+
+// Exchange 实现 upstream.Upstream 接口
+func (u *proxyUpstream) Exchange(m *dns.Msg) (*dns.Msg, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), u.timeout)
+	defer cancel()
+
+	// 根据协议类型选择连接方式
+	switch u.protocol {
+	case "https":
+		return u.exchangeHTTPS(ctx, m)
+	case "tcp":
+		return u.exchangeTCP(ctx, m)
+	default: // "udp"
+		return u.exchangeUDP(ctx, m)
+	}
+}
+
+// exchangeHTTPS 通过 DoH (DNS-over-HTTPS) 进行查询
+func (u *proxyUpstream) exchangeHTTPS(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
+	// 打包 DNS 消息
+	packed, err := m.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("打包 DNS 消息失败: %w", err)
+	}
+
+	// 创建自定义 HTTP Transport，使用 outbound 代理
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// 使用 outbound 的 Dial 方法建立连接
+			return u.outbound.Dial(ctx, network, addr)
+		},
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   u.timeout,
+	}
+	defer client.CloseIdleConnections()
+
+	// 发送 POST 请求
+	req, err := http.NewRequestWithContext(ctx, "POST", u.address, bytes.NewReader(packed))
+	if err != nil {
+		return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("发送 DoH 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("DoH 服务器返回错误: %d %s", resp.StatusCode, resp.Status)
+	}
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取 DoH 响应失败: %w", err)
+	}
+
+	// 解析 DNS 响应
+	respMsg := new(dns.Msg)
+	if err := respMsg.Unpack(body); err != nil {
+		return nil, fmt.Errorf("解析 DNS 响应失败: %w", err)
+	}
+
+	return respMsg, nil
+}
+
+// exchangeTCP 通过 TCP 进行 DNS 查询
+func (u *proxyUpstream) exchangeTCP(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
+	// 使用 outbound 建立 TCP 连接
+	conn, err := u.outbound.Dial(ctx, "tcp", u.address)
+	if err != nil {
+		return nil, fmt.Errorf("代理连接失败: %w", err)
+	}
+	defer conn.Close()
+
+	// 创建 DNS 连接
+	dnsConn := &dns.Conn{Conn: conn}
+
+	// 发送查询
+	if err := dnsConn.WriteMsg(m); err != nil {
+		return nil, fmt.Errorf("发送 DNS 查询失败: %w", err)
+	}
+
+	// 接收响应
+	resp, err := dnsConn.ReadMsg()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 响应失败: %w", err)
+	}
+
+	return resp, nil
+}
+
+// exchangeUDP 通过 UDP 进行 DNS 查询
+func (u *proxyUpstream) exchangeUDP(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
+	// 注意: SOCKS5 的 UDP 支持比较复杂，大多数场景下建议使用 TCP
+	// 这里先使用直连 UDP 作为 fallback
+	// TODO: 如果需要完整的 SOCKS5 UDP 支持，需要实现 SOCKS5 UDP ASSOCIATE
+
+	// 使用 outbound 的 DialUDP
+	conn, err := u.outbound.DialUDP(ctx, u.address)
+	if err != nil {
+		return nil, fmt.Errorf("UDP 连接失败: %w", err)
+	}
+	defer conn.Close()
+
+	// 解析目标地址
+	addr, err := net.ResolveUDPAddr("udp", u.address)
+	if err != nil {
+		return nil, fmt.Errorf("解析地址失败: %w", err)
+	}
+
+	// 打包 DNS 消息
+	packed, err := m.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("打包 DNS 消息失败: %w", err)
+	}
+
+	// 发送查询
+	if _, err := conn.WriteTo(packed, addr); err != nil {
+		return nil, fmt.Errorf("发送 DNS 查询失败: %w", err)
+	}
+
+	// 接收响应
+	buf := make([]byte, 4096)
+	n, _, err := conn.ReadFrom(buf)
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 响应失败: %w", err)
+	}
+
+	// 解析响应
+	resp := new(dns.Msg)
+	if err := resp.Unpack(buf[:n]); err != nil {
+		return nil, fmt.Errorf("解析 DNS 响应失败: %w", err)
+	}
+
+	return resp, nil
+}
+
+// Address 实现 upstream.Upstream 接口
+func (u *proxyUpstream) Address() string {
+	return u.address
+}
+
+// Close 实现 upstream.Upstream 接口
+func (u *proxyUpstream) Close() error {
+	return nil
 }
 
 // NewGroup 创建新的上游组
@@ -51,22 +221,26 @@ func NewGroup(name string, nameservers []string, ob outbound.Outbound, timeout t
 
 // createUpstream 创建单个 upstream
 func (g *Group) createUpstream(nameserver string) (upstream.Upstream, error) {
-	// AdGuard upstream 支持的格式:
-	// - https://dns.google/dns-query (DoH)
-	// - tls://dns.google (DoT)
-	// - quic://dns.adguard.com (DoQ)
-	// - 8.8.8.8:53 或 8.8.8.8 (UDP/TCP)
-	// - tcp://8.8.8.8:53 (强制 TCP)
-	// - sdns://... (DNSCrypt)
+	// 判断是否需要使用代理
+	needsProxy := g.needsProxy()
 
-	// 处理不带端口的普通 IP
-	if !strings.Contains(nameserver, "://") && !strings.Contains(nameserver, ":") {
-		// 检查是否是 IP 地址
-		if net.ParseIP(nameserver) != nil {
-			nameserver = nameserver + ":53"
-		}
+	// 解析 nameserver 格式
+	protocol, address := g.parseNameserver(nameserver)
+
+	// 如果需要代理
+	if needsProxy {
+		// 对于所有协议（包括加密协议），都使用我们的 proxyUpstream
+		g.logger.Debug("创建代理 upstream: nameserver=%s protocol=%s address=%s", nameserver, protocol, address)
+
+		return &proxyUpstream{
+			address:  address,
+			protocol: protocol,
+			outbound: g.outbound,
+			timeout:  g.timeout,
+		}, nil
 	}
 
+	// 不需要代理，使用 AdGuard upstream
 	// 使用 AdGuard upstream 库创建
 	opts := &upstream.Options{
 		Timeout: g.timeout,
@@ -79,6 +253,62 @@ func (g *Group) createUpstream(nameserver string) (upstream.Upstream, error) {
 	}
 
 	return u, nil
+}
+
+// needsProxy 判断当前 outbound 是否需要代理
+func (g *Group) needsProxy() bool {
+	// 检查 outbound 是否是 DirectOutbound
+	_, isDirect := g.outbound.(*outbound.DirectOutbound)
+	return !isDirect
+}
+
+// parseNameserver 解析 nameserver 格式，返回协议和地址
+func (g *Group) parseNameserver(nameserver string) (protocol, address string) {
+	// 支持的格式:
+	// - https://dns.google/dns-query (DoH)
+	// - tls://dns.google (DoT)
+	// - quic://dns.adguard.com (DoQ)
+	// - tcp://8.8.8.8:53 (TCP)
+	// - udp://8.8.8.8:53 (UDP)
+	// - 8.8.8.8:53 (默认 UDP)
+	// - 8.8.8.8 (默认 UDP, 端口 53)
+
+	// 如果包含 ://，提取协议
+	if strings.Contains(nameserver, "://") {
+		parts := strings.SplitN(nameserver, "://", 2)
+		protocol = parts[0]
+		address = parts[1]
+
+		// 对于 HTTPS，保留完整 URL
+		if protocol == "https" {
+			address = nameserver
+			return protocol, address
+		}
+
+		// 对于 TLS/QUIC，暂不支持代理（需要额外实现）
+		if protocol == "tls" || protocol == "quic" {
+			// 返回原始地址，让 AdGuard upstream 处理
+			return protocol, nameserver
+		}
+
+		// 对于普通 DNS，确保有端口
+		if (protocol == "tcp" || protocol == "udp") && !strings.Contains(address, ":") {
+			address = address + ":53"
+		}
+
+		return protocol, address
+	}
+
+	// 没有协议前缀，默认为 UDP
+	address = nameserver
+	if !strings.Contains(address, ":") {
+		// 检查是否是 IP 地址
+		if net.ParseIP(address) != nil {
+			address = address + ":53"
+		}
+	}
+
+	return "udp", address // 默认 UDP
 }
 
 // Query 查询 DNS

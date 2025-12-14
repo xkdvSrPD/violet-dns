@@ -52,8 +52,6 @@ func (o *SOCKS5Outbound) Dial(ctx context.Context, network, address string) (net
 
 // DialUDP 建立 UDP 连接
 func (o *SOCKS5Outbound) DialUDP(ctx context.Context, address string) (net.PacketConn, error) {
-	// 注意: DNS 查询通常不通过 SOCKS5 UDP
-	// 对于需要代理的 DNS 查询，建议使用 DoH/DoT (通过 TCP)
-	// 如果确实需要 SOCKS5 UDP，可以使用直连作为 fallback
-	return net.ListenPacket("udp", ":0")
+	// 使用完整的 SOCKS5 UDP ASSOCIATE
+	return o.DialUDPWithAssociate(ctx, address)
 }
