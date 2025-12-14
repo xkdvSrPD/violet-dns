@@ -55,7 +55,6 @@ outbound:
     port: 17890
     username: hk
     password: hk
-    udp: true  # Enable UDP over SOCKS5
 
   - tag: hk
     type: socks5
@@ -64,7 +63,6 @@ outbound:
     port: 17890
     username: hk
     password: hk
-    udp: true  # Enable UDP over SOCKS5
 
   - tag: us
     type: socks5
@@ -73,7 +71,6 @@ outbound:
     port: 17891
     username: us
     password: us
-    udp: true
 
 # ECS (EDNS Client Subnet) Global Configuration
 ecs:
