@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +21,188 @@ import (
 type ContextKey string
 
 const TraceIDKey ContextKey = "trace_id"
+
+// 颜色常量
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorGray   = "\033[90m"
+)
+
+// CustomJSONFormatter 自定义 JSON 格式化器，确保字段顺序
+type CustomJSONFormatter struct {
+	TimestampFormat string
+}
+
+// Format 实现 logrus.Formatter 接口
+func (f *CustomJSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	var b bytes.Buffer
+
+	// 设置时间格式
+	timestampFormat := f.TimestampFormat
+	if timestampFormat == "" {
+		timestampFormat = "2006-01-02 15:04:05.000"
+	}
+
+	b.WriteString("{")
+
+	// 1. time 字段（第一个）
+	b.WriteString(fmt.Sprintf(`"time":"%s"`, entry.Time.Format(timestampFormat)))
+
+	// 2. level 字段（第二个）
+	b.WriteString(fmt.Sprintf(`,"level":"%s"`, entry.Level.String()))
+
+	// 3. msg 字段（第三个）
+	b.WriteString(fmt.Sprintf(`,"msg":"%s"`, escapeJSON(entry.Message)))
+
+	// 4. 其他字段按字母顺序排序
+	if len(entry.Data) > 0 {
+		keys := make([]string, 0, len(entry.Data))
+		for k := range entry.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			v := entry.Data[k]
+			b.WriteString(fmt.Sprintf(`,"%s":`, escapeJSON(k)))
+
+			switch val := v.(type) {
+			case string:
+				b.WriteString(fmt.Sprintf(`"%s"`, escapeJSON(val)))
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+				b.WriteString(fmt.Sprintf(`%d`, val))
+			case float32, float64:
+				b.WriteString(fmt.Sprintf(`%f`, val))
+			case bool:
+				b.WriteString(fmt.Sprintf(`%t`, val))
+			case []string:
+				b.WriteString("[")
+				for i, s := range val {
+					if i > 0 {
+						b.WriteString(",")
+					}
+					b.WriteString(fmt.Sprintf(`"%s"`, escapeJSON(s)))
+				}
+				b.WriteString("]")
+			default:
+				b.WriteString(fmt.Sprintf(`"%v"`, val))
+			}
+		}
+	}
+
+	b.WriteString("}\n")
+	return b.Bytes(), nil
+}
+
+// escapeJSON 转义 JSON 字符串
+func escapeJSON(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
+	return s
+}
+
+// CustomTextFormatter 自定义文本格式化器，带颜色支持
+type CustomTextFormatter struct {
+	TimestampFormat string
+	ForceColors     bool
+	DisableColors   bool
+}
+
+// Format 实现 logrus.Formatter 接口
+func (f *CustomTextFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	var b bytes.Buffer
+
+	timestampFormat := f.TimestampFormat
+	if timestampFormat == "" {
+		timestampFormat = "2006-01-02 15:04:05.000"
+	}
+
+	useColors := f.ForceColors || (!f.DisableColors && checkIfTerminal())
+
+	// 时间
+	if useColors {
+		b.WriteString(colorGray)
+	}
+	b.WriteString(entry.Time.Format(timestampFormat))
+	if useColors {
+		b.WriteString(colorReset)
+	}
+	b.WriteString(" ")
+
+	// 级别（带颜色）
+	levelText := strings.ToUpper(entry.Level.String())
+	if useColors {
+		switch entry.Level {
+		case logrus.DebugLevel:
+			b.WriteString(colorBlue)
+		case logrus.WarnLevel:
+			b.WriteString(colorYellow)
+		case logrus.ErrorLevel, logrus.FatalLevel, logrus.PanicLevel:
+			b.WriteString(colorRed)
+		}
+	}
+	b.WriteString(fmt.Sprintf("[%-5s]", levelText))
+	if useColors {
+		b.WriteString(colorReset)
+	}
+	b.WriteString(" ")
+
+	// 消息
+	b.WriteString(entry.Message)
+
+	// 其他字段
+	if len(entry.Data) > 0 {
+		b.WriteString(" ")
+		keys := make([]string, 0, len(entry.Data))
+		for k := range entry.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		first := true
+		for _, k := range keys {
+			if !first {
+				b.WriteString(" ")
+			}
+			first = false
+
+			v := entry.Data[k]
+			if useColors {
+				b.WriteString(colorGray)
+			}
+			b.WriteString(fmt.Sprintf("%s=", k))
+			if useColors {
+				b.WriteString(colorReset)
+			}
+
+			switch val := v.(type) {
+			case string:
+				b.WriteString(val)
+			case []string:
+				b.WriteString("[" + strings.Join(val, ",") + "]")
+			default:
+				b.WriteString(fmt.Sprintf("%v", val))
+			}
+		}
+	}
+
+	b.WriteString("\n")
+	return b.Bytes(), nil
+}
+
+// checkIfTerminal 检查是否是终端
+func checkIfTerminal() bool {
+	if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
+		return true
+	}
+	return false
+}
 
 // Logger 日志中间件
 type Logger struct {
@@ -58,19 +243,16 @@ func NewLogger(cfg *LogConfig) *Logger {
 
 	// 设置格式
 	if cfg.Format == "json" {
-		log.SetFormatter(&logrus.JSONFormatter{
-			TimestampFormat:   "2006-01-02T15:04:05.000Z07:00",
-			DisableHTMLEscape: true, // 禁用 HTML 转义，避免 > 被转义为 \u003e
-			FieldMap: logrus.FieldMap{
-				logrus.FieldKeyTime:  "time",
-				logrus.FieldKeyLevel: "level",
-				logrus.FieldKeyMsg:   "msg",
-			},
+		log.SetFormatter(&CustomJSONFormatter{
+			TimestampFormat: "2006-01-02 15:04:05.000",
 		})
 	} else {
-		log.SetFormatter(&logrus.TextFormatter{
-			FullTimestamp:   true,
+		// text 格式，支持颜色
+		isTerminal := cfg.Output == "" || cfg.Output == "stdout"
+		log.SetFormatter(&CustomTextFormatter{
 			TimestampFormat: "2006-01-02 15:04:05.000",
+			ForceColors:     isTerminal,  // 输出到终端时强制启用颜色
+			DisableColors:   !isTerminal, // 输出到文件时禁用颜色
 		})
 	}
 
