@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -93,8 +94,55 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	resp.SetReply(r)
 	resp.Id = r.Id
 
+	// 检查并处理 UDP 报文大小限制
+	resp = s.ensureUDPSize(resp, r, w)
+
 	// 写入响应
 	if err := w.WriteMsg(resp); err != nil {
 		s.logger.Error("写入响应失败: client=%s error=%v", clientIP, err)
 	}
+}
+
+// ensureUDPSize 确保 UDP 响应不超过大小限制
+func (s *Server) ensureUDPSize(resp *dns.Msg, req *dns.Msg, w dns.ResponseWriter) *dns.Msg {
+	// 只处理 UDP 连接
+	if _, ok := w.RemoteAddr().(*net.UDPAddr); !ok {
+		return resp
+	}
+
+	// 获取客户端支持的最大 UDP 大小
+	maxSize := 512 // 默认 DNS over UDP 最大 512 字节
+	if opt := req.IsEdns0(); opt != nil {
+		maxSize = int(opt.UDPSize())
+		// 限制最大值,避免过大的值导致分片
+		if maxSize > 1232 {
+			maxSize = 1232 // 安全的 UDP 最大值,避免 IPv6 分片
+		}
+	}
+
+	// 检查响应大小
+	resp.Compress = true // 启用压缩
+	if resp.Len() <= maxSize {
+		return resp
+	}
+
+	// 响应过大,设置 TC 标志并截断
+	s.logger.Debug("UDP 响应过大(%d > %d),设置 TC 标志: domain=%s qtype=%d",
+		resp.Len(), maxSize, req.Question[0].Name, req.Question[0].Qtype)
+
+	resp.Truncated = true
+
+	// 移除 Answer/Authority/Additional 记录直到满足大小限制
+	// 优先保留 Answer 记录
+	for resp.Len() > maxSize && len(resp.Extra) > 0 {
+		resp.Extra = resp.Extra[:len(resp.Extra)-1]
+	}
+	for resp.Len() > maxSize && len(resp.Ns) > 0 {
+		resp.Ns = resp.Ns[:len(resp.Ns)-1]
+	}
+	for resp.Len() > maxSize && len(resp.Answer) > 1 {
+		resp.Answer = resp.Answer[:len(resp.Answer)-1]
+	}
+
+	return resp
 }

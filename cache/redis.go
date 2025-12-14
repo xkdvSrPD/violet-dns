@@ -92,6 +92,10 @@ func (c *RedisDNSCache) SetRRs(qname string, qtype uint16, items []*RRCacheItem)
 	// 使用 pipeline 批量写入
 	pipe := c.client.Pipeline()
 
+	// CRITICAL: 先删除旧记录,避免重复累积
+	// 使用 DEL 而非 ZREM,因为我们要清空整个 key 后重新写入
+	pipe.Del(ctx, key)
+
 	var maxExpire time.Duration
 
 	for _, item := range items {
