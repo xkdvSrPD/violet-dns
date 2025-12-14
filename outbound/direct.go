@@ -18,11 +18,3 @@ func (o *DirectOutbound) Dial(ctx context.Context, network, address string) (net
 	var d net.Dialer
 	return d.DialContext(ctx, network, address)
 }
-
-// DialUDP 建立 UDP 连接
-func (o *DirectOutbound) DialUDP(ctx context.Context, address string) (net.PacketConn, error) {
-	// 使用 ListenPacket 而不是 Dial 来创建 UDP 连接
-	// ListenPacket 返回 PacketConn 接口，适合 UDP 通信
-	lc := &net.ListenConfig{}
-	return lc.ListenPacket(ctx, "udp", ":0")
-}

@@ -47,8 +47,8 @@ func (u *proxyUpstream) Exchange(m *dns.Msg) (*dns.Msg, error) {
 		return u.exchangeHTTPS(ctx, m)
 	case "tcp":
 		return u.exchangeTCP(ctx, m)
-	default: // "udp"
-		return u.exchangeUDP(ctx, m)
+	default:
+		return nil, fmt.Errorf("不支持的协议: %s (仅支持 https 和 tcp)", u.protocol)
 	}
 }
 
@@ -139,52 +139,6 @@ func (u *proxyUpstream) exchangeTCP(ctx context.Context, m *dns.Msg) (*dns.Msg, 
 	return resp, nil
 }
 
-// exchangeUDP 通过 UDP 进行 DNS 查询
-func (u *proxyUpstream) exchangeUDP(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
-	// 注意: SOCKS5 的 UDP 支持比较复杂，大多数场景下建议使用 TCP
-	// 这里先使用直连 UDP 作为 fallback
-	// TODO: 如果需要完整的 SOCKS5 UDP 支持，需要实现 SOCKS5 UDP ASSOCIATE
-
-	// 使用 outbound 的 DialUDP
-	conn, err := u.outbound.DialUDP(ctx, u.address)
-	if err != nil {
-		return nil, fmt.Errorf("UDP 连接失败: %w", err)
-	}
-	defer conn.Close()
-
-	// 解析目标地址
-	addr, err := net.ResolveUDPAddr("udp", u.address)
-	if err != nil {
-		return nil, fmt.Errorf("解析地址失败: %w", err)
-	}
-
-	// 打包 DNS 消息
-	packed, err := m.Pack()
-	if err != nil {
-		return nil, fmt.Errorf("打包 DNS 消息失败: %w", err)
-	}
-
-	// 发送查询
-	if _, err := conn.WriteTo(packed, addr); err != nil {
-		return nil, fmt.Errorf("发送 DNS 查询失败: %w", err)
-	}
-
-	// 接收响应
-	buf := make([]byte, 4096)
-	n, _, err := conn.ReadFrom(buf)
-	if err != nil {
-		return nil, fmt.Errorf("读取 DNS 响应失败: %w", err)
-	}
-
-	// 解析响应
-	resp := new(dns.Msg)
-	if err := resp.Unpack(buf[:n]); err != nil {
-		return nil, fmt.Errorf("解析 DNS 响应失败: %w", err)
-	}
-
-	return resp, nil
-}
-
 // Address 实现 upstream.Upstream 接口
 func (u *proxyUpstream) Address() string {
 	return u.address
@@ -266,12 +220,14 @@ func (g *Group) needsProxy() bool {
 func (g *Group) parseNameserver(nameserver string) (protocol, address string) {
 	// 支持的格式:
 	// - https://dns.google/dns-query (DoH)
-	// - tls://dns.google (DoT)
-	// - quic://dns.adguard.com (DoQ)
+	// - tls://dns.google (DoT) - 不支持代理
+	// - quic://dns.adguard.com (DoQ) - 不支持代理
 	// - tcp://8.8.8.8:53 (TCP)
-	// - udp://8.8.8.8:53 (UDP)
-	// - 8.8.8.8:53 (默认 UDP)
-	// - 8.8.8.8 (默认 UDP, 端口 53)
+	// - udp://8.8.8.8:53 (UDP) - 仅 direct 出站支持
+	// - 8.8.8.8:53 (默认 UDP, 仅 direct 出站支持)
+	// - 8.8.8.8 (默认 UDP, 端口 53, 仅 direct 出站支持)
+	//
+	// 注意: SOCKS5 代理仅支持 HTTPS (DoH) 和 TCP 协议
 
 	// 如果包含 ://，提取协议
 	if strings.Contains(nameserver, "://") {
@@ -299,7 +255,7 @@ func (g *Group) parseNameserver(nameserver string) (protocol, address string) {
 		return protocol, address
 	}
 
-	// 没有协议前缀，默认为 UDP
+	// 没有协议前缀，默认为 UDP (仅 direct 出站支持)
 	address = nameserver
 	if !strings.Contains(address, ":") {
 		// 检查是否是 IP 地址

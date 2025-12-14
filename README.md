@@ -73,10 +73,12 @@ Cache (缓存结果)
 - **CNAME 优化**: 部分 CNAME 链缓存
 
 ### 5. Outbound (代理)
-- **Direct**: 直接连接
-- **SOCKS5**: 支持 TCP 和认证
-- **DoH 代理**: 通过 SOCKS5 代理访问 DoH 服务器
-- **注意**: SOCKS5 UDP 支持是实验性的
+- **Direct**: 直接连接，支持所有协议 (UDP/TCP/HTTPS/DoT/DoQ)
+- **SOCKS5**: 仅支持 TCP 和 HTTPS (DoH) 协议
+- **重要限制**:
+  - SOCKS5 代理**不支持 UDP DNS 查询**
+  - 使用 SOCKS5 代理的 upstream_group **必须使用 HTTPS (DoH) 或 TCP (tcp://) 协议**
+  - 配置验证会强制检查此限制
 
 ### 6. Domain Classification
 - **格式**: V2Ray domain-list-community (dlc.dat)
@@ -113,26 +115,30 @@ bootstrap:
 
 ```yaml
 upstream_group:
-  # 代理组 (无 ECS)
+  # 代理组 (无 ECS) - 仅支持 HTTPS 和 TCP 协议
   proxy:
     nameservers:
       - https://1.1.1.1/dns-query
       - https://8.8.8.8/dns-query
     outbound: hk        # 使用的出站代理
 
-  # 代理组 (带 ECS)
+  # 代理组 (带 ECS) - 仅支持 HTTPS 协议
   proxy_ecs:
     nameservers:
       - https://dns.google/dns-query
     outbound: hk
     ecs_ip: 1.2.3.4/24  # 组级 ECS IP
 
-  # 直连组
+  # 直连组 - 支持所有协议
   direct:
     nameservers:
-      - 10.115.15.1     # 本地 DNS
+      - 10.115.15.1     # 本地 DNS (UDP)
+      - tcp://8.8.8.8:53  # TCP DNS
+      - https://dns.google/dns-query  # DoH
     outbound: direct
 ```
+
+**重要**: 使用 SOCKS5 出站的 upstream_group 只能配置 `https://` 或 `tcp://` 协议的 nameserver。
 
 ### 出站代理
 
@@ -148,8 +154,11 @@ outbound:
     port: 1080
     username: user      # 可选
     password: pass      # 可选
-    udp: true           # 实验性功能
 ```
+
+**注意**:
+- SOCKS5 代理仅支持 TCP 和 HTTPS (DoH) 协议
+- UDP DNS 查询不支持通过 SOCKS5 代理
 
 ### ECS 配置
 
@@ -342,9 +351,13 @@ dig @127.0.0.1 -p 10053 AAAA google.com
 
 ### SOCKS5 代理
 
-- **TCP DNS**: 通过 SOCKS5 TCP CONNECT
-- **DoH**: 自定义 HTTP Transport 使用 SOCKS5
-- **UDP DNS**: 实验性支持 (使用时请谨慎)
+- **TCP DNS**: 通过 SOCKS5 TCP CONNECT (tcp://8.8.8.8:53)
+- **DoH**: 自定义 HTTP Transport 使用 SOCKS5 (https://dns.google/dns-query)
+- **UDP DNS**: 不支持
+
+**配置要求**:
+- 使用 SOCKS5 代理的 upstream_group 必须配置 HTTPS 或 TCP nameserver
+- 配置验证会自动检查并拒绝不符合要求的配置
 
 ## 启动流程
 
@@ -421,10 +434,11 @@ dig @127.0.0.1 -p 10053 AAAA google.com
 ## 已知限制
 
 1. **TCP DNS Server**: 配置项存在但未实现
-2. **SOCKS5 UDP**: 实验性功能，可能不稳定
-3. **并发限制**: max_concurrent_queries 配置当前未实现
-4. **日志输出**: 当前仅支持 stdout
-5. **DoT/DoQ 代理**: 不支持通过 SOCKS5 代理
+2. **SOCKS5 UDP**: 不支持，必须使用 HTTPS (DoH) 或 TCP 协议
+3. **SOCKS5 代理限制**: 使用 SOCKS5 代理的 upstream_group 只能配置 HTTPS 或 TCP nameserver
+4. **并发限制**: max_concurrent_queries 配置当前未实现
+5. **日志输出**: 当前仅支持 stdout
+6. **DoT/DoQ 代理**: 不支持通过 SOCKS5 代理
 
 ## 技术栈
 
@@ -446,7 +460,6 @@ dig @127.0.0.1 -p 10053 AAAA google.com
 ## 后续计划
 
 - [ ] TCP DNS Server 支持
-- [ ] 完善 SOCKS5 UDP ASSOCIATE
 - [ ] 并发限制实现
 - [ ] Stale Serving (上游失败时返回过期缓存)
 - [ ] 日志轮转和文件输出

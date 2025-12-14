@@ -44,7 +44,6 @@ type OutboundConfig struct {
 	Port     int    `yaml:"port"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-	UDP      bool   `yaml:"udp"`
 }
 
 // ECSConfig ECS 配置

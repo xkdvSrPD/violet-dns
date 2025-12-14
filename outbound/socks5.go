@@ -49,9 +49,3 @@ func (o *SOCKS5Outbound) Dial(ctx context.Context, network, address string) (net
 	// 使用 SOCKS5 dialer
 	return o.dialer.Dial(network, address)
 }
-
-// DialUDP 建立 UDP 连接
-func (o *SOCKS5Outbound) DialUDP(ctx context.Context, address string) (net.PacketConn, error) {
-	// 使用完整的 SOCKS5 UDP ASSOCIATE
-	return o.DialUDPWithAssociate(ctx, address)
-}

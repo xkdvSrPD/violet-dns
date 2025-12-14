@@ -97,9 +97,11 @@ func validateUpstreamGroup(groups map[string]*UpstreamGroupConfig) error {
 }
 
 func validateOutbound(outbounds []OutboundConfig, groups map[string]*UpstreamGroupConfig) error {
-	// 收集所有 outbound tag
+	// 收集所有 outbound tag 和类型
 	outboundTags := make(map[string]bool)
-	outboundTags["direct"] = true // direct 默认存在
+	outboundTypes := make(map[string]string)
+	outboundTags["direct"] = true      // direct 默认存在
+	outboundTypes["direct"] = "direct" // direct 类型
 
 	for _, ob := range outbounds {
 		if ob.Type == "socks5" {
@@ -111,6 +113,7 @@ func validateOutbound(outbounds []OutboundConfig, groups map[string]*UpstreamGro
 			}
 		}
 		outboundTags[ob.Tag] = true
+		outboundTypes[ob.Tag] = ob.Type
 	}
 
 	// 验证 upstream_group 引用的 outbound 存在
@@ -118,8 +121,20 @@ func validateOutbound(outbounds []OutboundConfig, groups map[string]*UpstreamGro
 		if group.Outbound != "" && !outboundTags[group.Outbound] {
 			return fmt.Errorf("组 %s 引用的 outbound 不存在: %s", name, group.Outbound)
 		}
-	}
 
+		// 验证非 direct outbound 的 nameserver 必须是 HTTPS
+		if group.Outbound != "direct" && group.Outbound != "" {
+			outboundType := outboundTypes[group.Outbound]
+			if outboundType != "direct" {
+				// 检查所有 nameserver 是否都是 https://
+				for _, ns := range group.Nameservers {
+					if !strings.HasPrefix(ns, "https://") {
+						return fmt.Errorf("组 %s 使用非 direct outbound (%s)，nameserver 必须使用 HTTPS 协议，当前为: %s", name, group.Outbound, ns)
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
