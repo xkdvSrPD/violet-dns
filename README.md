@@ -1,482 +1,467 @@
-# Violet DNS Server
+# violet-dns
 
-一个高性能、智能分流的 DNS 服务器，支持多上游 DNS 提供商、域名分类、EDNS Client Subnet、SOCKS5 代理路由和缓存。
+自动 DNS 代理服务器，支持域名分类、GeoIP 路由、ECS、多级缓存和自动回退。
 
 ## 特性
 
-- **智能分流**: 基于域名分类和 IP 地理位置的智能 DNS 路由
-- **多协议支持**: UDP DNS、TCP DNS、DNS-over-HTTPS (DoH)
-- **代理支持**: SOCKS5 代理（支持 TCP DNS 和 DoH，UDP DNS 实验性支持）
-- **高性能缓存**: 支持内存和 Redis 两种缓存后端，RR 级别缓存
-- **CNAME 优化**: 部分 CNAME 链缓存，减少查询延迟
-- **GeoIP 匹配**: 基于 IP 地理位置和 ASN 的智能回退
-- **域名分类**: 支持 V2Ray domain-list-community 格式
-- **ECS 支持**: EDNS Client Subnet，优化 CDN 解析
-- **详细日志**: 结构化日志，支持 Trace ID 链路追踪
+- **自动路由** - 基于域名分类的查询策略，支持直连、代理、阻断
+- **GeoIP/ASN 匹配** - IP 验证和地理位置判断
+- **CNAME 链缓存** - RR 级别缓存，支持 CNAME 链部分命中
+- **ECS 支持** - EDNS Client Subnet，可按组配置
+- **并发回退** - proxy_ecs_fallback 策略并发查询多个上游，自动选择最优结果
+- **多级缓存** - DNS 缓存和域名分类缓存，支持 Redis 和内存两种后端
+- **代理支持** - 上游 DNS 和文件下载支持 SOCKS5 代理
+- **自动更新** - 定时更新域名分类和 GeoIP 数据库
+- **高性能** - Singleflight 去重，连接池复用
 
-## 系统架构
+## 快速开始
 
-```
-客户端 DNS 查询
-    ↓
-DNS Server (UDP)
-    ↓
-Query Router (策略匹配)
-    ↓
-├─ Block 策略 → 返回阻止响应
-├─ Proxy ECS Fallback → 智能分流
-└─ 普通查询
-    ↓
-Upstream Manager (上游管理)
-    ↓
-└─ Upstream Group (并发查询)
-    ↓
-    ├─ 直连 → DNS 服务器
-    └─ SOCKS5 代理 → DNS 服务器
-        ↓
-Cache (缓存结果)
-    ↓
-返回响应
-```
-
-## 核心组件
-
-### 1. DNS Server
-- **协议**: UDP (TCP 未实现)
-- **端口**: 可配置 (默认 10053)
-- **并发处理**: 每个查询独立 goroutine
-- **链路追踪**: 每个查询分配唯一 Trace ID
-
-### 2. Query Router
-- **CNAME 链缓存**: 部分缓存 CNAME 链，减少查询次数
-- **域名分组**: 支持逐级向上匹配 (www.google.com → google.com → com)
-- **策略路由**: 支持多种策略 (block、direct、proxy、proxy_ecs_fallback)
-- **IP 验证**: 查询后验证 IP 是否符合预期规则
-- **Fallback 机制**: IP 不符合时自动回退到其他组
-
-### 3. Upstream Manager
-- **并发查询**: 同组内所有 nameserver 并发查询，返回最快响应
-- **协议支持**:
-  - UDP DNS (8.8.8.8:53)
-  - TCP DNS (tcp://8.8.8.8:53)
-  - DNS-over-HTTPS (https://dns.google/dns-query)
-  - DNS-over-TLS (tls://dns.google, 不支持代理)
-  - DNS-over-QUIC (quic://dns.adguard.com, 不支持代理)
-- **ECS 注入**: 支持 IPv4 和 IPv6 ECS
-- **代理路由**: 支持通过 SOCKS5 代理查询
-
-### 4. Cache System
-- **DNS 缓存**: RR 级别缓存 (按 qname + qtype)
-- **分类缓存**: 域名 → 分组映射
-- **后端支持**: 内存缓存、Redis 缓存
-- **TTL 控制**: 严格遵守原始 TTL，支持最大 TTL 限制
-- **CNAME 优化**: 部分 CNAME 链缓存
-
-### 5. Outbound (代理)
-- **Direct**: 直接连接，支持所有协议 (UDP/TCP/HTTPS/DoT/DoQ)
-- **SOCKS5**: 仅支持 TCP 和 HTTPS (DoH) 协议
-- **重要限制**:
-  - SOCKS5 代理**不支持 UDP DNS 查询**
-  - 使用 SOCKS5 代理的 upstream_group **必须使用 HTTPS (DoH) 或 TCP (tcp://) 协议**
-  - 配置验证会强制检查此限制
-
-### 6. Domain Classification
-- **格式**: V2Ray domain-list-community (dlc.dat)
-- **预加载**: 启动时加载到缓存
-- **定时更新**: 支持 cron 表达式定时更新
-- **属性过滤**: 支持 @cn、@!cn 等属性
-
-### 7. GeoIP Matching
-- **数据库**: MaxMind GeoLite2-Country、GeoLite2-ASN
-- **规则**: geoip:cn、geoip:!cn、geoip:private、asn:4134
-- **用途**: IP 验证和智能回退决策
-
-## 配置说明
-
-### 基本配置
-
-```yaml
-# DNS 服务器配置
-server:
-  port: 10053        # 监听端口
-  protocol: udp      # 协议 (目前仅支持 udp)
-  bind: 0.0.0.0      # 监听地址
-
-# Bootstrap DNS (用于解析 nameserver 域名)
-bootstrap:
-  nameservers:
-    - 223.5.5.5
-    - 119.29.29.29
-```
-
-### 上游 DNS 组
-
-必须配置三个组：`proxy`、`proxy_ecs`、`direct`
-
-```yaml
-upstream_group:
-  # 代理组 (无 ECS) - 仅支持 HTTPS 和 TCP 协议
-  proxy:
-    nameservers:
-      - https://1.1.1.1/dns-query
-      - https://8.8.8.8/dns-query
-    outbound: hk        # 使用的出站代理
-
-  # 代理组 (带 ECS) - 仅支持 HTTPS 协议
-  proxy_ecs:
-    nameservers:
-      - https://dns.google/dns-query
-    outbound: hk
-    ecs_ip: 1.2.3.4/24  # 组级 ECS IP
-
-  # 直连组 - 支持所有协议
-  direct:
-    nameservers:
-      - 10.115.15.1     # 本地 DNS (UDP)
-      - tcp://8.8.8.8:53  # TCP DNS
-      - https://dns.google/dns-query  # DoH
-    outbound: direct
-```
-
-**重要**: 使用 SOCKS5 出站的 upstream_group 只能配置 `https://` 或 `tcp://` 协议的 nameserver。
-
-### 出站代理
-
-```yaml
-outbound:
-  - tag: direct
-    type: direct        # 内置，直接连接
-
-  - tag: hk
-    type: socks5
-    enable: true
-    server: 127.0.0.1
-    port: 1080
-    username: user      # 可选
-    password: pass      # 可选
-```
-
-**注意**:
-- SOCKS5 代理仅支持 TCP 和 HTTPS (DoH) 协议
-- UDP DNS 查询不支持通过 SOCKS5 代理
-
-### ECS 配置
-
-```yaml
-ecs:
-  enable: true
-  default_ipv4: 1.2.3.4/24
-  default_ipv6: 2001:db8::/64
-  ipv4_prefix: 24       # 注意: 当前固定为 /24
-  ipv6_prefix: 64       # 注意: 当前固定为 /56
-```
-
-### 缓存配置
-
-```yaml
-cache:
-  dns_cache:
-    enable: true
-    clear: false        # 生产环境应为 false
-    type: redis         # redis 或 memory
-
-  category_cache:
-    enable: true
-    clear: false
-    type: redis
-    ttl: 604800         # 7 天
-
-# Redis 配置
-redis:
-  server: localhost
-  port: 6379
-  database: 0
-  password: ""
-  max_retries: 3
-  pool_size: 10
-```
-
-### 域名分类
-
-```yaml
-category_policy:
-  preload:
-    enable: true
-    file: 'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat'
-    update: '0 0 3 * * *'  # 每天 3 点更新
-    domain_group:
-      proxy_site:
-        - google
-        - geolocation-!cn
-      direct_site:
-        - cn
-      ads_site:
-        - category-ads-all
-```
-
-### 查询策略
-
-```yaml
-query_policy:
-  # 阻止广告
-  - name: ads_site
-    group: block
-    options:
-      block_type: nxdomain  # nxdomain、noerror、0.0.0.0
-      block_ttl: 60
-
-  # 代理站点
-  - name: proxy_site
-    group: proxy
-    options:
-      expected_ips:         # IP 验证规则
-        - geoip:!cn
-        - geoip:private
-      fallback_group: direct  # IP 不符合时回退到 direct
-
-  # 国内站点
-  - name: direct_site
-    group: direct
-    options:
-      expected_ips:
-        - geoip:cn
-
-  # 未知域名 (智能回退)
-  - name: unknown
-    group: proxy_ecs_fallback
-    options:
-      auto_categorize: true  # 自动更新分类缓存
-```
-
-### Fallback 配置
-
-```yaml
-fallback:
-  geoip: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb'
-  asn: 'https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb'
-  update: '0 0 7 * * *'
-  strategy: race          # 并发查询策略
-  rule:                   # 回退到 direct 的规则
-    - geoip:cn
-    - geoip:private
-    - asn:4134            # 中国电信
-```
-
-### 性能配置
-
-```yaml
-performance:
-  max_concurrent_queries: 1000  # 注意: 当前未实现限制
-```
-
-### 日志配置
-
-```yaml
-log:
-  level: debug          # debug, info, warn, error
-  format: json          # json 或 text
-  output: stdout        # 当前仅支持 stdout
-```
-
-## 安装和使用
-
-### 编译
+### 安装
 
 ```bash
-go build -o violet-dns
+go build
+```
+
+### 配置
+
+复制示例配置：
+
+```bash
+cp run/config.yaml config.yaml
+```
+
+主要配置项：
+
+```yaml
+server:
+  port: 53              # DNS 端口
+  bind: "0.0.0.0"       # 监听地址
+
+upstream_group:
+  direct:               # 直连组
+    nameservers: ["223.5.5.5", "119.29.29.29"]
+  proxy:                # 代理组（无 ECS）
+    nameservers: ["https://dns.google/dns-query"]
+    outbound: "proxy"
+  proxy_ecs:            # 代理组（带 ECS）
+    nameservers: ["https://dns.google/dns-query"]
+    outbound: "proxy"
+    ecs_ip: "8.8.8.8"
+
+outbound:
+  - tag: "proxy"
+    type: "socks5"
+    enable: true
+    server: "127.0.0.1"
+    port: 1080
+
+query_policy:
+  - name: "cn_site"     # 国内域名走直连
+    group: "direct"
+  - name: "proxy_site"  # 代理域名走代理
+    group: "proxy"
+    options:
+      disable_https: true
+  - name: "block_site"  # 阻断域名
+    group: "block"
+    options:
+      block_type: "nxdomain"
 ```
 
 ### 运行
 
 ```bash
-# 使用默认配置文件 (config.yaml)
+# 普通模式
 ./violet-dns
 
 # 指定配置文件
 ./violet-dns -c /path/to/config.yaml
 
 # 指定运行目录
-./violet-dns -d /path/to/runtime/dir
+./violet-dns -d /path/to/runtime
+
+# 预加载模式（加载域名分类到 Redis）
+./violet-dns -load
 ```
 
-### 测试查询
-
-```bash
-# 查询域名
-dig @127.0.0.1 -p 10053 google.com
-
-# 查询 AAAA 记录
-dig @127.0.0.1 -p 10053 AAAA google.com
-```
-
-## 工作原理
+## 核心概念
 
 ### 查询流程
 
-1. **接收查询**: DNS Server 接收客户端的 UDP 查询
-2. **CNAME 缓存解析**: 尝试从缓存解析 CNAME 链
-3. **域名匹配**: 查找域名所属分组 (使用 category_cache)
-4. **策略选择**: 根据分组选择对应的 query_policy
-5. **特殊处理**:
-   - Block 策略: 直接返回阻止响应
-   - Proxy ECS Fallback: 并发查询 proxy_ecs 和 proxy，智能选择
-6. **上游查询**: 使用对应的 upstream_group 查询
-7. **IP 验证**: 检查返回的 IP 是否符合 expected_ips
-8. **Fallback**: IP 不符合时:
-   - 有 fallback_group: 使用 fallback_group 查询 (最终结果)
-   - 无 fallback_group: 继续匹配下一个 policy
-9. **CNAME 合并**: 合并缓存的 CNAME 链
-10. **缓存结果**: 将查询结果缓存
-11. **返回响应**: 返回给客户端
+```
+DNS 查询
+  ↓
+CNAME 链缓存解析（部分命中）
+  ↓
+域名分类匹配（cn_site/proxy_site/block_site/unknown）
+  ↓
+查询策略匹配（direct/proxy/proxy_ecs/block/proxy_ecs_fallback）
+  ↓
+上游组查询（带 ECS、代理）
+  ↓
+IP 验证（expected_ips）
+  ↓
+回退组查询（fallback_group，如果验证失败）
+  ↓
+RR 级别缓存
+  ↓
+返回结果
+```
 
-### Proxy ECS Fallback 机制
+### 域名分类
 
-用于未知域名的智能分流:
+域名分类存储在 `dlc.dat`（来自 v2ray/domain-list-community），支持三种匹配方式：
 
-1. **并发查询**: 同时查询 proxy_ecs 和 proxy 组
-2. **等待 proxy_ecs**: 最长等待 3 秒
-3. **IP 规则匹配**:
-   - proxy_ecs 返回的 IP 匹配 fallback.rule → 使用 direct 组
-   - 不匹配 → 使用 proxy 组结果
-4. **自动分类**: 根据最终使用的组更新 category_cache
+- **完整匹配** - `example.com` 只匹配 `example.com`
+- **域名匹配** - `domain:example.com` 匹配 `example.com` 和所有子域名
+- **关键字匹配** - `keyword:google` 匹配包含 `google` 的所有域名
 
-### 上游并发查询
+分类缓存支持两种模式：
 
-同一组内的所有 nameserver 并发查询:
+1. **按需查询**（默认）- 查询时从 dlc.dat 读取，结果缓存到 Redis/内存
+2. **预加载**（`-load` 模式）- 启动时将所有分类加载到 Redis
 
-1. 启动所有 nameserver 的查询 goroutine
-2. 等待第一个成功响应
-3. 取消其他正在进行的查询
-4. 返回最快的响应
+### 查询策略
 
-### SOCKS5 代理
+每个域名分类对应一个查询策略，策略指定：
 
-- **TCP DNS**: 通过 SOCKS5 TCP CONNECT (tcp://8.8.8.8:53)
-- **DoH**: 自定义 HTTP Transport 使用 SOCKS5 (https://dns.google/dns-query)
-- **UDP DNS**: 不支持
+- **上游组** - 使用哪个 upstream_group
+- **策略选项** - disable_cache, disable_https, ecs, expected_ips, fallback_group 等
 
-**配置要求**:
-- 使用 SOCKS5 代理的 upstream_group 必须配置 HTTPS 或 TCP nameserver
-- 配置验证会自动检查并拒绝不符合要求的配置
+#### 特殊策略
 
-## 启动流程
+**block** - 阻断域名，返回指定类型的响应：
+- `nxdomain` - NXDOMAIN（域名不存在）
+- `noerror` - NOERROR（空响应）
+- `0.0.0.0` - 返回 0.0.0.0
 
-### 阶段 1: 配置加载与验证
-- 读取配置文件
-- 验证所有配置项
-- 检查必需组和引用
+**proxy_ecs_fallback** - 并发查询策略（未分类域名的默认策略）：
+1. 并发查询 `proxy_ecs` 和 `proxy` 组
+2. 检查 `proxy_ecs` 结果的 IP 是否匹配 `fallback.rule`（GeoIP 规则）
+3. 如果匹配，查询 `direct` 组并返回
+4. 否则返回 `proxy` 或 `proxy_ecs` 结果
+5. 自动将域名分类为 `direct_site` 或 `proxy_site`
 
-### 阶段 2: 外部文件下载
-- 下载 dlc.dat (V2Ray domain-list-community)
-- 下载 Country.mmdb (GeoIP 数据库)
-- 下载 GeoLite2-ASN.mmdb (ASN 数据库)
+### IP 验证与回退
 
-### 阶段 3: 数据预加载
-- 连接 Redis (如果配置)
-- 解析 DLC 文件
-- 加载域名分组到 category_cache
-- 批量写入 Redis
+策略可以配置 `expected_ips`（GeoIP 规则数组），验证上游返回的 IP：
 
-### 阶段 4: 组件初始化
-- 初始化 GeoIP Matcher
-- 初始化 Bootstrap DNS
-- 初始化 Upstream Manager
-- 初始化 Cache
-- 初始化 Query Router
+```yaml
+query_policy:
+  - name: "cn_site"
+    group: "proxy"
+    options:
+      expected_ips: ["geoip:cn"]      # 期望返回国内 IP
+      fallback_group: "direct"        # 如果不是国内 IP，使用 direct 组重查
+```
 
-### 阶段 5: 启动服务
-- 启动定时任务 (更新分类和 GeoIP)
-- 启动 DNS Server (UDP)
-- 等待系统信号
-- 优雅关闭
+验证逻辑：
+- 所有返回的 IP 必须匹配 expected_ips 中的任一规则
+- 如果验证失败且配置了 `fallback_group`，使用该组重新查询（最终结果，不再验证）
+- 如果没有配置 `fallback_group`，回退到 `proxy_ecs_fallback` 策略
 
-## 日志示例
+### GeoIP 规则
 
-```json
-{
-  "level": "info",
-  "time": "2025-12-14T10:00:00+08:00",
-  "msg": "DNS查询开始",
-  "trace_id": "abc123",
-  "domain": "google.com",
-  "qtype": "A"
-}
+支持的规则格式：
 
-{
-  "level": "debug",
-  "time": "2025-12-14T10:00:00+08:00",
-  "msg": "域名分类匹配",
-  "trace_id": "abc123",
-  "domain": "google.com",
-  "category": "proxy_site"
-}
+- `geoip:cn` - 国家代码（ISO 3166-1 alpha-2）
+- `geoip:private` - 私有 IP（10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16）
+- `asn:13335` - ASN 号（自治系统号）
 
-{
-  "level": "info",
-  "time": "2025-12-14T10:00:00+08:00",
-  "msg": "DNS查询完成",
-  "trace_id": "abc123",
-  "domain": "google.com",
-  "total_latency": "50ms",
-  "cache_hit": false,
-  "group": "proxy"
-}
+### CNAME 链缓存
+
+DNS 缓存按 RR 记录级别存储（不是完整的 DNS 消息），支持 CNAME 链部分命中：
+
+**示例：** `a.com -> b.com -> c.com -> 1.2.3.4`
+
+1. 第一次查询 `a.com`，缓存所有 RR：
+   - `a.com CNAME b.com`
+   - `b.com CNAME c.com`
+   - `c.com A 1.2.3.4`
+
+2. `c.com A` 记录过期后再次查询 `a.com`：
+   - 从缓存返回 `a.com CNAME b.com` 和 `b.com CNAME c.com`
+   - 只查询上游 `c.com A`
+   - 合并结果返回
+
+### ECS（EDNS Client Subnet）
+
+ECS 在上游组级别配置：
+
+```yaml
+upstream_group:
+  proxy_ecs:
+    nameservers: ["https://dns.google/dns-query"]
+    ecs_ip: "8.8.8.8"              # 固定 ECS IP
+  proxy_ecs_auto:
+    nameservers: ["https://dns.google/dns-query"]
+    ecs_ip: ""                     # 使用全局默认 ECS（如果启用）
+
+ecs:
+  enable: true                     # 全局 ECS 开关
+  default_ipv4: "8.8.8.8"          # 默认 IPv4 ECS
+  default_ipv6: "2001:4860:4860::8888"
+  ipv4_prefix: 24                  # ECS 前缀长度
+  ipv6_prefix: 48
+```
+
+逻辑：
+- 如果组配置了 `ecs_ip`，使用该值
+- 如果组是 `proxy_ecs` 且未配置 `ecs_ip`，且全局 ECS 启用，使用全局默认值
+- 否则不添加 ECS
+
+### 缓存
+
+#### DNS 缓存
+
+RR 级别缓存，每条记录独立存储，包含：
+- RR 记录内容
+- 原始 TTL 和存储时间
+- Rcode, AD, RA 标志
+
+支持后端：
+- **Redis** - 跨进程共享，持久化
+- **Memory** - 进程内存，重启丢失
+
+最大 TTL 固定为 24 小时。
+
+#### 域名分类缓存
+
+存储域名到分类的映射（如 `google.com -> proxy_site`）。
+
+支持后端：
+- **Redis** - TTL 可配置（默认 1 天）
+- **Memory** - 无 TTL 限制
+
+### 代理支持
+
+支持通过 SOCKS5 代理进行：
+- **上游 DNS 查询** - DoH (DNS-over-HTTPS) 和 TCP 协议
+- **文件下载** - dlc.dat, Country.mmdb, GeoLite2-ASN.mmdb
+
+每个上游组可以指定不同的 outbound：
+
+```yaml
+upstream_group:
+  direct:
+    nameservers: ["223.5.5.5"]
+    outbound: "direct"             # 不使用代理
+  proxy:
+    nameservers: ["https://dns.google/dns-query"]
+    outbound: "proxy"              # 使用 SOCKS5 代理
+
+outbound:
+  - tag: "proxy"
+    type: "socks5"
+    enable: true
+    server: "127.0.0.1"
+    port: 1080
+    username: ""                   # 可选
+    password: ""                   # 可选
+  - tag: "file_download"           # 文件下载专用代理
+    type: "socks5"
+    enable: true
+    server: "127.0.0.1"
+    port: 1080
+```
+
+### Bootstrap DNS
+
+用于解析上游 DNS 服务器的域名（如 `dns.google`）：
+
+```yaml
+bootstrap:
+  nameservers: ["223.5.5.5", "119.29.29.29"]
+
+upstream_group:
+  proxy:
+    nameservers: ["https://dns.google/dns-query"]  # 需要 bootstrap 解析 dns.google
+    resolve_nameservers: ["223.5.5.5"]             # 可选，覆盖全局 bootstrap
+    resolve_strategy: "ipv4_only"                  # ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
+```
+
+### 自动更新
+
+支持定时更新域名分类和 GeoIP 数据库（cron 表达式）：
+
+```yaml
+category_policy:
+  preload:
+    file: "https://github.com/v2fly/domain-list-community/releases/download/20231201/dlc.dat"
+    update: "0 3 * * *"            # 每天凌晨 3 点更新
+
+fallback:
+  geoip: "https://github.com/Loyalsoldier/geoip/releases/latest/download/Country.mmdb"
+  asn: "https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-ASN.mmdb"
+  update: "0 4 * * 0"              # 每周日凌晨 4 点更新
+```
+
+### 日志
+
+支持结构化日志和自动轮转：
+
+```yaml
+log:
+  level: "info"                    # debug, info, warn, error
+  format: "json"                   # json, text
+  output: "violet-dns.log"         # stdout 或文件路径
+  max_size: 100                    # 单文件最大大小（MB）
+  max_age: 7                       # 保留天数
+  max_backups: 10                  # 保留文件数
+  compress: true                   # 压缩旧日志
+  total_size_limit: 1000           # 总大小限制（MB）
+```
+
+## 配置示例
+
+### 完整配置
+
+见 `run/config.yaml`，包含所有配置项和注释。
+
+### 常见场景
+
+#### 1. 国内直连 + 国外代理
+
+```yaml
+query_policy:
+  - name: "cn_site"
+    group: "direct"
+  - name: "proxy_site"
+    group: "proxy"
+    options:
+      disable_https: true          # 禁用 HTTPS/SVCB 记录
+  - name: "block_site"
+    group: "block"
+
+category_policy:
+  preload:
+    domain_group:
+      cn_site: ["cn", "apple-cn", "geolocation-cn"]
+      proxy_site: ["google", "youtube", "facebook", "twitter", "github"]
+      block_site: ["category-ads-all"]
+```
+
+#### 2. 自动分流
+
+```yaml
+query_policy:
+  - name: "cn_site"
+    group: "direct"
+  - name: "proxy_site"
+    group: "proxy"
+    options:
+      expected_ips: ["geoip:!cn"]  # 期望返回非国内 IP
+      fallback_group: "direct"     # 如果是国内 IP，走直连
+```
+
+未分类域名自动使用 `proxy_ecs_fallback` 策略：
+- 并发查询 proxy_ecs 和 proxy
+- 如果 proxy_ecs 返回国内 IP，自动切换到 direct
+- 自动学习域名分类
+
+#### 3. 纯直连 + 广告过滤
+
+```yaml
+upstream_group:
+  direct:
+    nameservers: ["223.5.5.5", "119.29.29.29"]
+
+query_policy:
+  - name: "block_site"
+    group: "block"
+
+category_policy:
+  preload:
+    domain_group:
+      block_site: ["category-ads-all"]
+```
+
+## 构建
+
+### 标准构建
+
+```bash
+go build
+```
+
+### 交叉编译（OpenWrt）
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build
+```
+
+### 优化构建
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -trimpath
+```
+
+## 部署
+
+### Systemd 服务
+
+```ini
+[Unit]
+Description=violet-dns
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/violet-dns -d /etc/violet-dns
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Docker
+
+```dockerfile
+FROM golang:1.25-alpine AS builder
+WORKDIR /build
+COPY . .
+RUN go build -ldflags="-s -w" -o violet-dns
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /build/violet-dns /usr/local/bin/
+WORKDIR /etc/violet-dns
+EXPOSE 53/udp 53/tcp
+CMD ["violet-dns"]
 ```
 
 ## 性能优化
 
-- **并发查询**: 同组 nameserver 并发，选择最快响应
-- **连接复用**: HTTP/2 连接池用于 DoH 查询
-- **多级缓存**: RR 级别缓存 + CNAME 链缓存
-- **批量操作**: Redis 使用 Pipeline 批量写入
-- **查询去重**: Singleflight 避免重复查询
+- **Singleflight** - 自动去重相同的并发查询
+- **连接池** - Redis 和 HTTP 连接复用
+- **并发查询** - proxy_ecs_fallback 策略并发查询多个上游
+- **部分缓存** - CNAME 链部分命中减少上游查询
+- **异步写入** - 域名分类缓存异步写入
 
-## 已知限制
+## 故障排除
 
-1. **TCP DNS Server**: 配置项存在但未实现
-2. **SOCKS5 UDP**: 不支持，必须使用 HTTPS (DoH) 或 TCP 协议
-3. **SOCKS5 代理限制**: 使用 SOCKS5 代理的 upstream_group 只能配置 HTTPS 或 TCP nameserver
-4. **并发限制**: max_concurrent_queries 配置当前未实现
-5. **日志输出**: 当前仅支持 stdout
-6. **DoT/DoQ 代理**: 不支持通过 SOCKS5 代理
+### Redis 连接失败
 
-## 技术栈
+如果 Redis 配置错误或无法连接，程序会自动降级到内存缓存并继续运行。
 
-- **DNS 库**: github.com/miekg/dns
-- **HTTP 客户端**: net/http (支持 HTTP/2)
-- **Redis 客户端**: github.com/redis/go-redis/v9
-- **Cron**: github.com/robfig/cron/v3
-- **日志**: github.com/sirupsen/logrus
-- **GeoIP**: github.com/oschwald/maxminddb-golang
-- **SOCKS5**: golang.org/x/net/proxy
-- **Singleflight**: golang.org/x/sync/singleflight
+### 文件下载失败
 
-## 参考项目
+检查 `file_download` outbound 配置，确保代理可用。程序会在启动时测试代理连接。
 
-- **mihomo**: 并发回退、ARC 缓存、HTTP/3 支持
-- **sing-box**: 传输层抽象、RDRC 缓存
-- **Xray-core**: IP 过滤、Stale Serving
+### 域名分类不生效
 
-## 后续计划
+1. 检查 `dlc.dat` 是否下载成功
+2. 检查 `category_policy.preload.domain_group` 配置
+3. 启用 debug 日志查看分类匹配结果
 
-- [ ] TCP DNS Server 支持
-- [ ] 并发限制实现
-- [ ] Stale Serving (上游失败时返回过期缓存)
-- [ ] 日志轮转和文件输出
-- [ ] HTTP API 接口
-- [ ] Web UI
-- [ ] Prometheus Metrics
-- [ ] DoT/DoQ 代理支持
+### 查询超时
 
-## 许可证
+调整超时配置（固定在代码中）：
+- Redis 操作：5s
+- 上游 DNS 查询：5s
+- proxy_ecs_fallback 并发查询：3s
 
-MIT License
+## 许可
 
-## 贡献
-
-欢迎提交 Issue 和 Pull Request。
-
-
-```sh
- CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o violet-dns-openwrt
-```
+MIT
