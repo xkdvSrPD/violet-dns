@@ -51,7 +51,7 @@ outbound:
   - tag: file_download
     type: socks5
     enable: true
-    server: 127.0.0.1
+    server: 10.115.15.1
     port: 17890
     username: hk
     password: hk
@@ -59,7 +59,7 @@ outbound:
   - tag: hk
     type: socks5
     enable: true
-    server: 127.0.0.1
+    server: 10.115.15.1
     port: 17890
     username: hk
     password: hk
@@ -67,7 +67,7 @@ outbound:
   - tag: us
     type: socks5
     enable: true
-    server: 127.0.0.1
+    server: 10.115.15.1
     port: 17891
     username: us
     password: us
