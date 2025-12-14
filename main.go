@@ -337,9 +337,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	logger.Info("=== Violet DNS Server 已启动 ===")
 	logger.Info("监听地址: %s:%d", cfg.Server.Bind, cfg.Server.Port)
-	logger.Info("按 Ctrl+C 停止服务器")
 
 	<-sigChan
 
