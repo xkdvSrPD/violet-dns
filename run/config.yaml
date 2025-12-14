@@ -185,7 +185,7 @@ fallback:
 
 # Logging Configuration
 log:
-  level: debug           # 日志级别: debug, info, warn, error
+  level: info           # 日志级别: debug, info, warn, error
   format: json           # 日志格式: json (结构化), text (带颜色的文本)
   output: stdout         # 输出位置: stdout (控制台), file (默认violet-dns.log), 或自定义路径
   max_size: 100          # 单个日志文件最大大小 (MB)，默认 100MB
