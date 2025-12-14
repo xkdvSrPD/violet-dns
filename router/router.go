@@ -136,6 +136,11 @@ func (r *Router) Route(ctx context.Context, domain string, qtype uint16) (*dns.M
 
 	r.logger.LogDNSAnswer(ctx, domain, finalResp.Answer)
 
+	// 8.5. 过滤 HTTPS/SVCB 记录（如果配置了 disable_https）
+	if policy.Options.DisableHTTPS {
+		r.filterHTTPSRecords(ctx, finalResp)
+	}
+
 	// 9. 验证 expected_ips（如果配置了）
 	if len(policy.Options.ExpectedIPs) > 0 {
 		finalResp, err = r.handleIPValidation(ctx, domain, qtype, targetName, finalResp, policy, cachedAnswers)
@@ -386,6 +391,11 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 
 				directResp, err := r.upstreamMgr.Query(ctx, "direct", domain, qtype)
 				if err == nil {
+					// 过滤 HTTPS/SVCB 记录（如果配置了 disable_https）
+					if policy.Options.DisableHTTPS {
+						r.filterHTTPSRecords(ctx, directResp)
+					}
+
 					// 缓存结果
 					if !policy.Options.DisableCache {
 						r.cacheResponse(ctx, domain, directResp, 0)
@@ -405,6 +415,11 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 
 	// 使用 proxy 结果
 	if proxyResp != nil {
+		// 过滤 HTTPS/SVCB 记录（如果配置了 disable_https）
+		if policy.Options.DisableHTTPS {
+			r.filterHTTPSRecords(ctx, proxyResp)
+		}
+
 		// 缓存结果
 		if !policy.Options.DisableCache {
 			r.cacheResponse(ctx, domain, proxyResp, 0)
@@ -419,6 +434,11 @@ func (r *Router) handleProxyECSFallbackV2(ctx context.Context, domain string, qt
 
 	// 使用 proxy_ecs 结果
 	if proxyECSResp != nil {
+		// 过滤 HTTPS/SVCB 记录（如果配置了 disable_https）
+		if policy.Options.DisableHTTPS {
+			r.filterHTTPSRecords(ctx, proxyECSResp)
+		}
+
 		// 缓存结果
 		if !policy.Options.DisableCache {
 			r.cacheResponse(ctx, domain, proxyECSResp, 0)
@@ -468,4 +488,41 @@ func (r *Router) validateIPs(resp *dns.Msg, expectedIPs []string) bool {
 	}
 
 	return true
+}
+
+// filterHTTPSRecords 过滤 HTTPS (type 65) 和 SVCB (type 64) 记录
+func (r *Router) filterHTTPSRecords(ctx context.Context, resp *dns.Msg) {
+	if resp == nil {
+		return
+	}
+
+	// 过滤 Answer 部分
+	filtered := make([]dns.RR, 0, len(resp.Answer))
+	removedCount := 0
+	for _, rr := range resp.Answer {
+		rrType := rr.Header().Rrtype
+		// type 64 = SVCB, type 65 = HTTPS
+		if rrType == dns.TypeSVCB || rrType == dns.TypeHTTPS {
+			removedCount++
+			continue
+		}
+		filtered = append(filtered, rr)
+	}
+	resp.Answer = filtered
+
+	// 过滤 Extra 部分（一些服务器会在 Extra 中放置 HTTPS 记录）
+	filteredExtra := make([]dns.RR, 0, len(resp.Extra))
+	for _, rr := range resp.Extra {
+		rrType := rr.Header().Rrtype
+		if rrType == dns.TypeSVCB || rrType == dns.TypeHTTPS {
+			removedCount++
+			continue
+		}
+		filteredExtra = append(filteredExtra, rr)
+	}
+	resp.Extra = filteredExtra
+
+	if removedCount > 0 {
+		r.logger.Debug("已移除 %d 条 HTTPS/SVCB 记录", removedCount)
+	}
 }

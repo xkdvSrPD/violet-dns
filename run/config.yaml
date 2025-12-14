@@ -140,6 +140,7 @@ query_policy:
     group: proxy_us
     options:
       strategy: prefer_ipv4
+      disable_https: true
 
   # Foreign sites through proxy
   - name: proxy_site
@@ -180,11 +181,13 @@ fallback:
     - asn:9808  # China Mobile
   # If IP matches rule → use direct, else use proxy
 
-# Performance Configuration
-performance:
-  max_concurrent_queries: 1000  # Prevent query storm
-
 # Logging Configuration
 log:
-  level: debug  # debug, info, warn, error
-  format: json  # or: text
+  level: debug           # 日志级别: debug, info, warn, error
+  format: json           # 日志格式: json (结构化), text (带颜色的文本)
+  output: stdout         # 输出位置: stdout (控制台), file (默认violet-dns.log), 或自定义路径
+  max_size: 100          # 单个日志文件最大大小 (MB)，默认 100MB
+  max_age: 7             # 日志文件保留天数，默认 7 天
+  max_backups: 10        # 保留的旧日志文件数量，默认 10 个
+  compress: true         # 是否压缩旧日志文件 (gzip)
+  total_size_limit: 500  # 所有日志文件总大小限制 (MB)，超过后自动删除最旧的文件

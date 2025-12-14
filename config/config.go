@@ -111,6 +111,7 @@ type QueryPolicyOptions struct {
 	Strategy       string   `yaml:"strategy"` // ipv4_only, ipv6_only, prefer_ipv4, prefer_ipv6
 	DisableCache   bool     `yaml:"disable_cache"`
 	DisableIPv6    bool     `yaml:"disable_ipv6"`
+	DisableHTTPS   bool     `yaml:"disable_https"`
 	ECS            string   `yaml:"ecs"`
 	ExpectedIPs    []string `yaml:"expected_ips"`
 	FallbackGroup  string   `yaml:"fallback_group"`
